@@ -14,6 +14,45 @@ function makeChunk(type, data) {
   return Buffer.concat([header, data, data.length % 2 ? Buffer.from([0]) : Buffer.alloc(0)])
 }
 
+function parseWebpChunks(webp) {
+  if (webp.length < 12 || webp.toString('ascii', 0, 4) !== 'RIFF' || webp.toString('ascii', 8, 12) !== 'WEBP') {
+    throw new Error('El archivo no es un WebP válido.')
+  }
+
+  const chunks = []
+  let offset = 12
+  while (offset + 8 <= webp.length) {
+    const type = webp.toString('ascii', offset, offset + 4)
+    const size = webp.readUInt32LE(offset + 4)
+    const start = offset + 8
+    const end = start + size
+    if (end > webp.length) break
+    chunks.push({ type, data: Buffer.from(webp.subarray(start, end)) })
+    offset = end + (size % 2)
+  }
+  return chunks
+}
+
+function rebuildWebp(chunks) {
+  const body = Buffer.concat(chunks.map(chunk => makeChunk(chunk.type, chunk.data)))
+  const header = Buffer.alloc(12)
+  header.write('RIFF', 0, 4, 'ascii')
+  header.writeUInt32LE(body.length + 4, 4)
+  header.write('WEBP', 8, 4, 'ascii')
+  return Buffer.concat([header, body])
+}
+
+function stripStickerMetadata(webp) {
+  const chunks = parseWebpChunks(webp)
+  const cleaned = chunks.filter(chunk => !['EXIF', 'XMP ', 'ICCP'].includes(chunk.type))
+  const vp8x = cleaned.find(chunk => chunk.type === 'VP8X')
+  if (vp8x?.data?.length) {
+    // Clear ICCP, EXIF and XMP flags while preserving alpha/animation flags.
+    vp8x.data[0] &= ~0x2c
+  }
+  return rebuildWebp(cleaned)
+}
+
 function writeUInt24LE(buffer, value, offset) {
   buffer[offset] = value & 0xff
   buffer[offset + 1] = (value >>> 8) & 0xff
@@ -41,22 +80,7 @@ function buildStickerExif(pack, author) {
 }
 
 function addStickerMetadata(webp, pack, author) {
-  if (webp.length < 12 || webp.toString('ascii', 0, 4) !== 'RIFF' || webp.toString('ascii', 8, 12) !== 'WEBP') {
-    throw new Error('El archivo no es un WebP válido.')
-  }
-
-  const chunks = []
-  let offset = 12
-  while (offset + 8 <= webp.length) {
-    const type = webp.toString('ascii', offset, offset + 4)
-    const size = webp.readUInt32LE(offset + 4)
-    const start = offset + 8
-    const end = start + size
-    if (end > webp.length) break
-    chunks.push({ type, data: Buffer.from(webp.subarray(start, end)) })
-    offset = end + (size % 2)
-  }
-
+  const chunks = parseWebpChunks(webp)
   const filtered = chunks.filter(chunk => chunk.type !== 'EXIF')
   let vp8x = filtered.find(chunk => chunk.type === 'VP8X')
 
@@ -94,12 +118,7 @@ function addStickerMetadata(webp, pack, author) {
   if (xmpIndex >= 0) filtered.splice(xmpIndex, 0, exifChunk)
   else filtered.push(exifChunk)
 
-  const body = Buffer.concat(filtered.map(chunk => makeChunk(chunk.type, chunk.data)))
-  const header = Buffer.alloc(12)
-  header.write('RIFF', 0, 4, 'ascii')
-  header.writeUInt32LE(body.length + 4, 4)
-  header.write('WEBP', 8, 4, 'ascii')
-  return Buffer.concat([header, body])
+  return rebuildWebp(filtered)
 }
 
 async function swm(ctx) {
@@ -123,6 +142,22 @@ async function swm(ctx) {
   }
 }
 
+async function sck(ctx) {
+  try {
+    const { buffer, type } = await ctx.downloadQuotedOrCurrent()
+    let webp
+    if (type.includes('imageMessage')) webp = await imageToWebp(buffer)
+    else if (type.includes('stickerMessage')) webp = buffer
+    else return ctx.reply('❌ Responde a una imagen o sticker con *.sck*.')
+
+    const cleanSticker = stripStickerMetadata(webp)
+    return ctx.sock.sendMessage(ctx.jid, { sticker: cleanSticker }, { quoted: ctx.msg })
+  } catch (error) {
+    console.error('SCK sticker error:', error)
+    return ctx.reply('❌ No pude limpiar ese sticker. Responde directamente al sticker o imagen con *.sck*.')
+  }
+}
+
 export const stickerCommands = {
   sticker: async ctx => {
     try {
@@ -135,6 +170,8 @@ export const stickerCommands = {
     }
   },
   s: async ctx => stickerCommands.sticker(ctx),
+  sck,
+  cleansticker: sck,
   swm,
   stickerwm: swm,
   toimg: async ctx => {
@@ -147,5 +184,12 @@ export const stickerCommands = {
       return ctx.reply('❌ No pude convertir ese sticker.')
     }
   },
-  stickerinfo: async ctx => ctx.reply('🎨 Sticker: responde a una imagen con *.sticker*.\nNombre/autor: responde a una imagen o sticker con *.swm RANDY SYSTEMS | Randy*.\nConversión: responde a un sticker con *.toimg*.')
+  stickerinfo: async ctx => ctx.reply(
+    '🎨 *COMANDOS DE STICKERS*\n' +
+    '• *.sticker* / *.s* → convierte una imagen en sticker.\n' +
+    '• *.sck* → crea/reenvía el sticker limpio, sin nombre, autor ni metadata del bot.\n' +
+    '• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n' +
+    '• *.toimg* → convierte un sticker en imagen.\n\n' +
+    'Tip: responde directamente a la imagen o sticker que quieres usar.'
+  )
 }
