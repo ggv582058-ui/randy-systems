@@ -22,5 +22,7 @@ export const config = {
   redisUrl: process.env.REDIS_URL || '',
   sessionBackupKey: process.env.SESSION_BACKUP_KEY || 'randy:whatsapp:session',
   sessionBackupIntervalMs: Math.max(5000, number(process.env.SESSION_BACKUP_INTERVAL_MS, 15000)),
-  sessionEncryptionKey: process.env.SESSION_ENCRYPTION_KEY || ''
+  sessionEncryptionKey: process.env.SESSION_ENCRYPTION_KEY || '',
+  setupToken: process.env.SETUP_TOKEN || '',
+  pairingCooldownMs: Math.max(5000, number(process.env.PAIRING_COOLDOWN_MS, 15000))
 }
