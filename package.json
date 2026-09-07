@@ -1,6 +1,6 @@
 {
   "name": "randy-whatsapp-bot",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Bot modular de WhatsApp para Randy, basado en Baileys",
   "type": "module",
   "main": "src/index.js",
@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
-    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "@whiskeysockets/baileys": "github:poison/Baileys#834dc742e349958fd162f7a2239514e9b237fb5a",
     "axios": "^1.11.0",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
