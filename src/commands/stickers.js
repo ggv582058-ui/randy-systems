@@ -1,8 +1,9 @@
 import sharp from 'sharp'
+import { config } from '../config.js'
 
 async function imageToWebp(buffer) {
   return sharp(buffer)
-    .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, a: 0 } })
     .webp({ quality: 82 })
     .toBuffer()
 }
@@ -46,10 +47,7 @@ function stripStickerMetadata(webp) {
   const chunks = parseWebpChunks(webp)
   const cleaned = chunks.filter(chunk => !['EXIF', 'XMP ', 'ICCP'].includes(chunk.type))
   const vp8x = cleaned.find(chunk => chunk.type === 'VP8X')
-  if (vp8x?.data?.length) {
-    // Clear ICCP, EXIF and XMP flags while preserving alpha/animation flags.
-    vp8x.data[0] &= ~0x2c
-  }
+  if (vp8x?.data?.length) vp8x.data[0] &= ~0x2c
   return rebuildWebp(cleaned)
 }
 
@@ -121,19 +119,20 @@ function addStickerMetadata(webp, pack, author) {
   return rebuildWebp(filtered)
 }
 
+async function mediaAsWebp(ctx) {
+  const { buffer, type } = await ctx.downloadQuotedOrCurrent()
+  if (type.includes('imageMessage')) return imageToWebp(buffer)
+  if (type.includes('stickerMessage')) return buffer
+  throw new Error('unsupported sticker source')
+}
+
 async function swm(ctx) {
   try {
-    const { buffer, type } = await ctx.downloadQuotedOrCurrent()
+    const webp = await mediaAsWebp(ctx)
     const text = ctx.args.join(' ').trim()
     const [packPart, authorPart] = text.split('|').map(value => value.trim())
     const pack = (packPart || 'RANDY SYSTEMS').slice(0, 100)
     const author = (authorPart || 'Randy').slice(0, 100)
-
-    let webp
-    if (type.includes('imageMessage')) webp = await imageToWebp(buffer)
-    else if (type.includes('stickerMessage')) webp = buffer
-    else return ctx.reply('❌ Responde a una imagen o sticker con *.swm Nombre | Autor*.')
-
     const sticker = addStickerMetadata(webp, pack, author)
     return ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
   } catch (error) {
@@ -144,17 +143,25 @@ async function swm(ctx) {
 
 async function sck(ctx) {
   try {
-    const { buffer, type } = await ctx.downloadQuotedOrCurrent()
-    let webp
-    if (type.includes('imageMessage')) webp = await imageToWebp(buffer)
-    else if (type.includes('stickerMessage')) webp = buffer
-    else return ctx.reply('❌ Responde a una imagen o sticker con *.sck*.')
-
+    const webp = await mediaAsWebp(ctx)
     const cleanSticker = stripStickerMetadata(webp)
     return ctx.sock.sendMessage(ctx.jid, { sticker: cleanSticker }, { quoted: ctx.msg })
   } catch (error) {
     console.error('SCK sticker error:', error)
     return ctx.reply('❌ No pude limpiar ese sticker. Responde directamente al sticker o imagen con *.sck*.')
+  }
+}
+
+async function cl(ctx) {
+  try {
+    const webp = await mediaAsWebp(ctx)
+    const pack = String(ctx.msg?.pushName || ctx.senderNumber || 'Usuario').slice(0, 100)
+    const author = String(config.botName || 'RANDY SYSTEMS').slice(0, 100)
+    const sticker = addStickerMetadata(webp, pack, author)
+    return ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
+  } catch (error) {
+    console.error('CL sticker error:', error)
+    return ctx.reply('❌ Responde a una imagen o sticker con *.cl*. El pack llevará tu nombre y el autor será RANDY SYSTEMS.')
   }
 }
 
@@ -170,6 +177,7 @@ export const stickerCommands = {
     }
   },
   s: async ctx => stickerCommands.sticker(ctx),
+  cl,
   sck,
   cleansticker: sck,
   swm,
@@ -187,7 +195,8 @@ export const stickerCommands = {
   stickerinfo: async ctx => ctx.reply(
     '🎨 *COMANDOS DE STICKERS*\n' +
     '• *.sticker* / *.s* → convierte una imagen en sticker.\n' +
-    '• *.sck* → crea/reenvía el sticker limpio, sin nombre, autor ni metadata del bot.\n' +
+    '• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n' +
+    '• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n' +
     '• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n' +
     '• *.toimg* → convierte un sticker en imagen.\n\n' +
     'Tip: responde directamente a la imagen o sticker que quieres usar.'
