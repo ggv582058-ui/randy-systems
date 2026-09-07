@@ -1,6 +1,6 @@
 {
   "name": "randy-whatsapp-bot",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Bot modular de WhatsApp para Randy, basado en Baileys",
   "type": "module",
   "main": "src/index.js",
@@ -19,7 +19,7 @@
     "axios": "^1.11.0",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
-    "link-preview-js": "^5.0.0",
+    "link-preview-js": "^3.2.0",
     "mathjs": "^14.6.0",
     "openai": "^5.16.0",
     "pino": "^9.9.0",
