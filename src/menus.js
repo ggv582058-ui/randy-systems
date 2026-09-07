@@ -2,7 +2,7 @@ import { config } from './config.js'
 import { timeAndDate } from './lib/utils.js'
 
 const categories = {
-  stickers: ['sticker', 's', 'stickerwm', 'toimg', 'stickerinfo'],
+  stickers: ['sticker', 's', 'swm', 'stickerwm', 'toimg', 'stickerinfo'],
   descargas: ['ytmp3', 'ytmp4', 'mediahelp'],
   grupos: ['admins', 'tagall', 'hidetag', 'kick', 'add', 'promote', 'demote', 'link', 'revoke', 'subject', 'desc', 'open', 'close', 'groupinfo'],
   ia: ['ia', 'resumir', 'traducir'],
