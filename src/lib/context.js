@@ -5,7 +5,7 @@ import { jidToNumber, quotedMessage, quotedParticipant } from './utils.js'
 export async function buildContext(sock, msg, parsed) {
   const jid = msg.key.remoteJid
   const isGroup = jid?.endsWith('@g.us')
-  const sender = msg.key.participant || msg.key.remoteJid
+  const sender = msg.key.fromMe ? (msg.key.participant || sock.user?.id || msg.key.remoteJid) : (msg.key.participant || msg.key.remoteJid)
   const senderNumber = jidToNumber(sender)
   let groupMetadata = null
   let participants = []
@@ -16,7 +16,7 @@ export async function buildContext(sock, msg, parsed) {
     groupMetadata = await sock.groupMetadata(jid).catch(() => null)
     participants = groupMetadata?.participants || []
     const me = sock.user?.id
-    const senderP = participants.find(p => p.id === sender)
+    const senderP = participants.find(p => p.id === sender || jidToNumber(p.id) === jidToNumber(sender))
     const botP = participants.find(p => p.id === me || jidToNumber(p.id) === jidToNumber(me))
     isAdmin = Boolean(senderP?.admin)
     isBotAdmin = Boolean(botP?.admin)
