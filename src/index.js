@@ -12,11 +12,12 @@ import { createSessionStore } from './lib/session-store.js'
 
 const logger = pino({ level: config.logLevel })
 const startedAt = new Date()
-const runtime = { connection: 'starting', connectedAt: null, lastDisconnectAt: null, lastDisconnectCode: null, qrPending: false, reconnectAttempts: 0 }
+const runtime = { connection: 'starting', connectedAt: null, lastDisconnectAt: null, lastDisconnectCode: null, qrPending: false, reconnectAttempts: 0, pairingPhone: null, pairingRequestedAt: null }
 let currentSock = null
 let reconnectTimer = null
 let shuttingDown = false
 let sessionBackupTimer = null
+let pairingBusy = false
 
 await fs.mkdir(config.sessionDir, { recursive: true })
 async function assertSessionDirWritable() { const probe = `${config.sessionDir}/.write-test-${process.pid}`; await fs.writeFile(probe, 'ok'); await fs.unlink(probe) }
@@ -30,10 +31,35 @@ if (sessionStore.enabled) {
   console.log('💾 Persistent session backup: enabled')
 }
 
-const app = express(); app.disable('x-powered-by')
-app.get('/', (_, res) => res.json({ ok: true, bot: config.botName, environment: config.env, connection: runtime.connection, uptimeSeconds: Math.floor(process.uptime()), startedAt: startedAt.toISOString(), connectedAt: runtime.connectedAt, reconnectAttempts: runtime.reconnectAttempts }))
+const app = express(); app.disable('x-powered-by'); app.use(express.json({ limit: '16kb' })); app.use(express.urlencoded({ extended: false }))
+function setupAuthorized(req) { if (!config.setupToken) return true; return req.query.token === config.setupToken || req.headers['x-setup-token'] === config.setupToken || req.body?.token === config.setupToken }
+function setupPage(token = '') {
+  const safeToken = String(token).replace(/[&<>'"]/g, '')
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${config.botName} • Vincular WhatsApp</title><style>body{margin:0;background:#08111f;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif;min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(520px,100%);background:#101a2b;border:1px solid #243453;border-radius:24px;padding:24px;box-shadow:0 24px 80px #0008}h1{margin:0 0 8px;font-size:28px}.muted{color:#9aabc5;margin:0 0 24px}.row{display:grid;grid-template-columns:140px 1fr;gap:12px}label{display:block;font-size:12px;color:#9aabc5;text-transform:uppercase;letter-spacing:.12em;margin:14px 0 8px}input,select{width:100%;box-sizing:border-box;background:#0b1423;border:1px solid #2d3f61;color:#fff;border-radius:14px;padding:15px;font-size:16px;outline:none}button{width:100%;margin-top:20px;border:0;border-radius:14px;padding:16px;font-size:16px;font-weight:800;background:#2f7df6;color:#fff}.status{margin-top:18px;padding:14px;border-radius:14px;background:#0b1423;white-space:pre-wrap}.ok{color:#71e6a8}.err{color:#ff8e9b}.code{font-size:32px;font-weight:900;letter-spacing:.18em;text-align:center;color:#79b5ff}</style></head><body><main class="card"><h1>${config.botName}</h1><p class="muted">Vincula el bot al número de WhatsApp que tú elijas usando código de emparejamiento.</p><form id="f"><label>País y número</label><div class="row"><select id="cc"><option value="1">🇺🇸 +1</option><option value="52">🇲🇽 +52</option><option value="34">🇪🇸 +34</option><option value="57">🇨🇴 +57</option><option value="58">🇻🇪 +58</option><option value="51">🇵🇪 +51</option><option value="54">🇦🇷 +54</option><option value="56">🇨🇱 +56</option><option value="593">🇪🇨 +593</option><option value="502">🇬🇹 +502</option><option value="503">🇸🇻 +503</option><option value="504">🇭🇳 +504</option><option value="505">🇳🇮 +505</option><option value="506">🇨🇷 +506</option><option value="507">🇵🇦 +507</option><option value="1809">🇩🇴 +1 809</option><option value="1787">🇵🇷 +1 787</option></select><input id="phone" inputmode="numeric" autocomplete="tel" placeholder="3477694617" required></div><button>GENERAR CÓDIGO</button></form><div id="s" class="status">El bot debe estar sin vincular para generar un código nuevo.</div></main><script>const token='${safeToken}';document.getElementById('f').addEventListener('submit',async e=>{e.preventDefault();const s=document.getElementById('s');s.className='status';s.textContent='Generando código...';const phone=(document.getElementById('cc').value+document.getElementById('phone').value).replace(/\D/g,'');try{const r=await fetch('/api/pair',{method:'POST',headers:{'content-type':'application/json','x-setup-token':token},body:JSON.stringify({phone})});const j=await r.json();if(!r.ok)throw new Error(j.error||'No se pudo generar el código');s.innerHTML='<div class="ok">Código generado para +'+j.phone+'</div><div class="code">'+j.code+'</div><div>En WhatsApp: Configuración → Dispositivos vinculados → Vincular un dispositivo → Vincular con número de teléfono.</div>'}catch(err){s.className='status err';s.textContent=err.message}})</script></body></html>`
+}
+app.get('/', (req, res) => { if (req.query.setup === '1') { if (!setupAuthorized(req)) return res.status(401).send('Unauthorized'); return res.type('html').send(setupPage(req.query.token || '')) } res.json({ ok: true, bot: config.botName, environment: config.env, connection: runtime.connection, uptimeSeconds: Math.floor(process.uptime()), startedAt: startedAt.toISOString(), connectedAt: runtime.connectedAt, reconnectAttempts: runtime.reconnectAttempts }) })
 app.get('/health', (_, res) => res.status(200).json({ ok: true, status: 'alive' }))
 app.get('/ready', (_, res) => { const ready = runtime.connection === 'open'; res.status(ready ? 200 : 503).json({ ok: ready, status: ready ? 'ready' : 'not_ready', connection: runtime.connection, qrPending: runtime.qrPending, lastDisconnectCode: runtime.lastDisconnectCode }) })
+app.post('/api/pair', async (req, res) => {
+  if (!setupAuthorized(req)) return res.status(401).json({ error: 'Acceso no autorizado.' })
+  if (runtime.connection === 'open' || currentSock?.user?.id) return res.status(409).json({ error: 'El bot ya está vinculado. Cierra la sesión actual antes de vincular otro número.' })
+  if (!currentSock?.requestPairingCode) return res.status(503).json({ error: 'WhatsApp todavía está iniciando. Intenta de nuevo en unos segundos.' })
+  const phone = String(req.body?.phone || '').replace(/\D/g, '')
+  if (phone.length < 8 || phone.length > 15) return res.status(400).json({ error: 'Escribe el número completo con código de país.' })
+  const elapsed = runtime.pairingRequestedAt ? Date.now() - new Date(runtime.pairingRequestedAt).getTime() : Infinity
+  if (pairingBusy || elapsed < config.pairingCooldownMs) return res.status(429).json({ error: 'Espera unos segundos antes de generar otro código.' })
+  pairingBusy = true
+  try {
+    runtime.pairingPhone = phone; runtime.pairingRequestedAt = new Date().toISOString()
+    const rawCode = await currentSock.requestPairingCode(phone)
+    const code = String(rawCode || '').replace(/\s/g, '')
+    console.log(`🔐 Pairing code requested for +${phone.slice(0, 3)}******${phone.slice(-2)}`)
+    return res.json({ ok: true, phone, code })
+  } catch (error) {
+    console.error('Pairing code error:', error)
+    return res.status(500).json({ error: 'WhatsApp no pudo generar el código. Verifica el número e inténtalo otra vez.' })
+  } finally { pairingBusy = false }
+})
 const healthServer = app.listen(config.port, config.host, () => { console.log(`🩺 Health server: http://${config.host}:${config.port}/health`); console.log(`💾 Session directory: ${config.sessionDir}`) })
 
 function scheduleReconnect(reason = 'connection closed') {
@@ -52,8 +78,8 @@ async function startBot() {
   sock.ev.on('creds.update', async () => { await saveCreds(); if (sessionStore.enabled) await sessionStore.backup().catch(() => {}) })
   sock.ev.on('connection.update', update => {
     const { connection, lastDisconnect, qr } = update
-    if (qr) { runtime.qrPending = true; runtime.connection = 'waiting_for_qr'; console.log('\n📱 Escanea este QR en WhatsApp → Dispositivos vinculados:\n'); qrcode.generate(qr, { small: true }) }
-    if (connection === 'open') { runtime.connection = 'open'; runtime.connectedAt = new Date().toISOString(); runtime.lastDisconnectCode = null; runtime.qrPending = false; runtime.reconnectAttempts = 0; sessionStore.backup().catch(() => {}); console.log(`✅ ${config.botName} conectado como ${sock.user?.id || 'bot'}`) }
+    if (qr) { runtime.qrPending = true; runtime.connection = 'waiting_for_qr'; console.log('\n📱 QR disponible. También puedes usar el panel web para generar código por número.\n'); if (config.env !== 'production') qrcode.generate(qr, { small: true }) }
+    if (connection === 'open') { runtime.connection = 'open'; runtime.connectedAt = new Date().toISOString(); runtime.lastDisconnectCode = null; runtime.qrPending = false; runtime.reconnectAttempts = 0; runtime.pairingPhone = null; sessionStore.backup().catch(() => {}); console.log(`✅ ${config.botName} conectado como ${sock.user?.id || 'bot'}`) }
     if (connection === 'close') {
       const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode
       const loggedOut = statusCode === DisconnectReason.loggedOut
