@@ -80,6 +80,24 @@ function scheduleReconnect(reason = 'connection closed') {
   reconnectTimer = setTimeout(async () => { reconnectTimer = null; try { await startBot() } catch (error) { console.error('Reconnect failed:', error); scheduleReconnect('startup failure') } }, config.reconnectDelayMs)
 }
 
+async function handleIncomingMessage(sock, msg) {
+  try {
+    if (!msg?.message) return
+    const jid = msg.key.remoteJid
+    if (!jid || jid === 'status@broadcast') return
+    const parsed = parseCommand(getText(msg), config.prefix)
+    if (!parsed) return
+    const handler = commands[parsed.command]
+    if (!handler) return
+    const ctx = await buildContext(sock, msg, parsed)
+    await handler(ctx)
+  } catch (error) {
+    console.error('Command error:', error)
+    const jid = msg?.key?.remoteJid
+    if (jid) await sock.sendMessage(jid, { text: '❌ Ocurrió un error ejecutando ese comando.' }, { quoted: msg }).catch(() => {})
+  }
+}
+
 async function startBot() {
   runtime.connection = pairingRestartInProgress ? 'pairing_starting' : (runtime.reconnectAttempts > 0 ? 'reconnecting' : 'starting')
   const { state, saveCreds } = await useMultiFileAuthState(config.sessionDir)
@@ -103,21 +121,9 @@ async function startBot() {
       scheduleReconnect(`disconnect code ${statusCode || 'unknown'}`)
     }
   })
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+  sock.ev.on('messages.upsert', ({ messages, type }) => {
     if (type !== 'notify') return
-    for (const msg of messages) {
-      try {
-        if (!msg?.message || msg.key.fromMe) continue
-        const jid = msg.key.remoteJid; if (!jid || jid === 'status@broadcast') continue
-        const parsed = parseCommand(getText(msg), config.prefix); if (!parsed) continue
-        const handler = commands[parsed.command]; if (!handler) continue
-        const ctx = await buildContext(sock, msg, parsed); await handler(ctx)
-      } catch (error) {
-        console.error('Command error:', error)
-        const jid = msg?.key?.remoteJid
-        if (jid) await sock.sendMessage(jid, { text: '❌ Ocurrió un error ejecutando ese comando.' }, { quoted: msg }).catch(() => {})
-      }
-    }
+    for (const msg of messages) void handleIncomingMessage(sock, msg)
   })
   return sock
 }
