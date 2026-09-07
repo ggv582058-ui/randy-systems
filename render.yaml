@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: randy-systems
+    runtime: node
+    plan: free
+    region: virginia
+    buildCommand: npm install --omit=dev
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BOT_NAME
+        value: RANDY SYSTEMS
+      - key: PREFIX
+        value: "."
+      - key: HOST
+        value: 0.0.0.0
+      - key: SESSION_DIR
+        value: /tmp/randy-session
+      - key: LOG_LEVEL
+        value: info
+      - key: RECONNECT_DELAY_MS
+        value: "5000"
+      - key: SESSION_BACKUP_KEY
+        value: randy:whatsapp:session
+      - key: SESSION_BACKUP_INTERVAL_MS
+        value: "15000"
+      - key: SESSION_ENCRYPTION_KEY
+        sync: false
+      - key: OWNER_NUMBER
+        sync: false
+      - key: GROUP_LINK
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5-mini
