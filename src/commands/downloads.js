@@ -118,12 +118,12 @@ async function sendAudio(ctx, target, label = '') {
   }
 }
 
-async function sendVideo(ctx, target, label = '') {
+async function sendVideo(ctx, target, label = '', format = 'best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/best') {
   await ctx.react('⏳')
   const info = await getInfo(target).catch(() => null)
   const source = info?.webpage_url || info?.original_url || target
   const title = safeName(info?.title || label || 'RANDY SYSTEMS Video')
-  const filePath = await downloadToTemp(source, 'best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/best')
+  const filePath = await downloadToTemp(source, format)
   try {
     const video = await fs.readFile(filePath)
     await ctx.sock.sendMessage(ctx.jid, {
@@ -159,7 +159,7 @@ async function play(ctx) {
 }
 
 async function youtubeVideo(ctx) {
-  if (!ctx.argText) return ctx.reply('🎬 Usa *.ytmp4 link* o *.youtube.video link*.')
+  if (!ctx.argText) return ctx.reply('🎬 Usa *.ytmp4 nombre/link* o *.youtube.video nombre/link*.')
   try {
     const target = looksLikeUrl(ctx.argText) ? ctx.argText.trim() : `ytsearch1:${ctx.argText.trim()}`
     return await sendVideo(ctx, target)
@@ -177,7 +177,14 @@ async function socialVideo(ctx, platform) {
     const host = new URL(url).hostname.toLowerCase()
     if (platform === 'tiktok' && !host.includes('tiktok.com')) return ctx.reply('❌ Ese enlace no parece ser de TikTok.')
     if (platform === 'instagram' && !host.includes('instagram.com')) return ctx.reply('❌ Ese enlace no parece ser de Instagram.')
-    return await sendVideo(ctx, url)
+
+    // yt-dlp exposes TikTok's play_addr as the direct video and marks download_addr
+    // as watermarked when TikTok reports that flag. Prefer play_addr first.
+    const format = platform === 'tiktok'
+      ? 'play_addr/best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/best'
+      : 'best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/best'
+
+    return await sendVideo(ctx, url, '', format)
   } catch (error) {
     console.error(`${platform} download error:`, error)
     await ctx.react('❌').catch(() => {})
@@ -185,17 +192,40 @@ async function socialVideo(ctx, platform) {
   }
 }
 
+const mediaHelp = `📥 *DESCARGAS • RANDY SYSTEMS*
+
+🎵 *.play canción* → busca la canción y manda el audio.
+🎵 *.play link* → audio desde un enlace compatible.
+🟢 *.spotify link* → toma el título/artista de Spotify y busca una fuente de audio compatible.
+🎧 *.ytmp3 link* → audio de YouTube.
+🎬 *.ytmp4 nombre/link* → video de YouTube.
+🎬 *.ytvideo nombre/link* → alias rápido para video de YouTube.
+🎵 *.youtube.play nombre/link* → audio de YouTube.
+📹 *.youtube.video nombre/link* → video de YouTube.
+🎵 *.tiktok link* / *.tt link* → video de TikTok, priorizando la versión directa sin watermark cuando TikTok la ofrece.
+📸 *.instagram link* / *.ig link* → video/Reel público de Instagram.
+
+⚠️ Solo enlaces públicos. WhatsApp limita el tamaño de archivos; el bot usa un máximo de 45 MB.
+Spotify se usa para identificar la canción; el bot no rompe el DRM de Spotify.`
+
 export const downloadCommands = {
   play,
   ytplay: play,
   'youtube.play': play,
   spotify: play,
+  sp: play,
   ytmp3: play,
+  yta: play,
   ytmp4: youtubeVideo,
+  ytvideo: youtubeVideo,
+  playvideo: youtubeVideo,
   'youtube.video': youtubeVideo,
   tiktok: async ctx => socialVideo(ctx, 'tiktok'),
   tt: async ctx => socialVideo(ctx, 'tiktok'),
+  tiktoknowm: async ctx => socialVideo(ctx, 'tiktok'),
+  ttnowm: async ctx => socialVideo(ctx, 'tiktok'),
   instagram: async ctx => socialVideo(ctx, 'instagram'),
   ig: async ctx => socialVideo(ctx, 'instagram'),
-  mediahelp: async ctx => ctx.reply('📥 *Descargas RANDY SYSTEMS*\n.play canción o link\n.spotify link\n.ytmp3 link\n.ytmp4 link\n.tiktok link\n.ig link\n\nSpotify se usa para localizar la canción; el audio se obtiene desde una fuente compatible, sin romper el DRM de Spotify.')
+  mediahelp: async ctx => ctx.reply(mediaHelp),
+  descargas: async ctx => ctx.reply(mediaHelp)
 }
