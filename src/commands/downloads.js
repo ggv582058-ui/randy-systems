@@ -9,7 +9,8 @@ const require = createRequire(import.meta.url)
 const ytdlp = require('youtube-dl-exec')
 
 const MAX_MEDIA_BYTES = 45 * 1024 * 1024
-const DOWNLOAD_TIMEOUT_MS = 150000
+const DOWNLOAD_TIMEOUT_MS = 120000
+const HTTP_TIMEOUT_MS = 30000
 
 function safeName(value = 'media') {
   return String(value)
@@ -57,10 +58,10 @@ async function getInfo(target) {
     skipDownload: true,
     noWarnings: true,
     noPlaylist: true,
-    socketTimeout: 20,
-    retries: 2,
-    extractorRetries: 2
-  }, { timeout: 45000 })
+    socketTimeout: 15,
+    retries: 1,
+    extractorRetries: 1
+  }, { timeout: 30000 })
   return firstEntry(raw)
 }
 
@@ -75,9 +76,9 @@ async function downloadToTemp(target, format) {
     noPlaylist: true,
     noWarnings: true,
     maxFilesize: '45M',
-    socketTimeout: 20,
-    retries: 3,
-    fragmentRetries: 3,
+    socketTimeout: 15,
+    retries: 2,
+    fragmentRetries: 2,
     concurrentFragments: 2
   }, { timeout: DOWNLOAD_TIMEOUT_MS })
 
@@ -96,8 +97,47 @@ async function downloadToTemp(target, format) {
   return filePath
 }
 
+async function downloadHttpBuffer(url) {
+  const response = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: HTTP_TIMEOUT_MS,
+    maxContentLength: MAX_MEDIA_BYTES,
+    maxBodyLength: MAX_MEDIA_BYTES,
+    headers: {
+      'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
+      accept: '*/*'
+    }
+  })
+  const buffer = Buffer.from(response.data)
+  if (!buffer.length) throw new Error('La fuente devolvió un archivo vacío.')
+  if (buffer.length > MAX_MEDIA_BYTES) throw new Error('El archivo supera 45 MB.')
+  return buffer
+}
+
+async function tiktokFallback(url) {
+  const { data } = await axios.get('https://www.tikwm.com/api/', {
+    params: { url, hd: 1 },
+    timeout: 20000,
+    headers: { 'user-agent': 'Mozilla/5.0 RANDY-SYSTEMS/1.0' }
+  })
+
+  if (data?.code !== 0 || !data?.data) {
+    throw new Error(data?.msg || 'TikTok fallback no devolvió el video.')
+  }
+
+  const mediaUrl = data.data.hdplay || data.data.play || data.data.wmplay
+  if (!mediaUrl) throw new Error('TikTok fallback no encontró una fuente reproducible.')
+
+  const video = await downloadHttpBuffer(mediaUrl)
+  return {
+    video,
+    title: safeName(data.data.title || 'TikTok'),
+    sourceClean: Boolean(data.data.hdplay || data.data.play)
+  }
+}
+
 async function sendAudio(ctx, target, label = '') {
-  await ctx.react('⏳')
+  await ctx.react('⏳').catch(() => {})
   const info = await getInfo(target).catch(() => null)
   const source = info?.webpage_url || info?.original_url || target
   const title = safeName(info?.title || label || 'RANDY SYSTEMS Audio')
@@ -112,14 +152,14 @@ async function sendAudio(ctx, target, label = '') {
       fileName: `${title}${ext || '.m4a'}`,
       ptt: false
     }, { quoted: ctx.msg })
-    await ctx.react('✅')
+    await ctx.react('✅').catch(() => {})
   } finally {
     await fs.rm(filePath, { force: true }).catch(() => {})
   }
 }
 
 async function sendVideo(ctx, target, label = '', format = 'best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/best') {
-  await ctx.react('⏳')
+  await ctx.react('⏳').catch(() => {})
   const info = await getInfo(target).catch(() => null)
   const source = info?.webpage_url || info?.original_url || target
   const title = safeName(info?.title || label || 'RANDY SYSTEMS Video')
@@ -132,7 +172,7 @@ async function sendVideo(ctx, target, label = '', format = 'best[ext=mp4][vcodec
       fileName: `${title}.mp4`,
       caption: `🎬 *${title}*\n🤖 RANDY SYSTEMS`
     }, { quoted: ctx.msg })
-    await ctx.react('✅')
+    await ctx.react('✅').catch(() => {})
   } finally {
     await fs.rm(filePath, { force: true }).catch(() => {})
   }
@@ -154,7 +194,7 @@ async function play(ctx) {
   } catch (error) {
     console.error('play/download audio error:', error)
     await ctx.react('❌').catch(() => {})
-    return ctx.reply(`❌ No pude sacar esa música ahora. ${error?.message || 'Intenta con otro enlace o nombre.'}`)
+    return ctx.reply('❌ No pude sacar esa música ahora. Prueba con otro nombre o enlace.')
   }
 }
 
@@ -166,25 +206,44 @@ async function youtubeVideo(ctx) {
   } catch (error) {
     console.error('youtube video error:', error)
     await ctx.react('❌').catch(() => {})
-    return ctx.reply(`❌ No pude descargar ese video. ${error?.message || 'Intenta con otro enlace.'}`)
+    return ctx.reply('❌ No pude descargar ese video ahora. Intenta con otro enlace o nombre.')
   }
 }
 
 async function socialVideo(ctx, platform) {
   const url = ctx.args[0]
   if (!url || !looksLikeUrl(url)) return ctx.reply(`📥 Usa *.${platform} link* con un enlace público.`)
+
+  const host = new URL(url).hostname.toLowerCase()
+  if (platform === 'tiktok' && !host.includes('tiktok.com')) return ctx.reply('❌ Ese enlace no parece ser de TikTok.')
+  if (platform === 'instagram' && !host.includes('instagram.com')) return ctx.reply('❌ Ese enlace no parece ser de Instagram.')
+
+  if (platform === 'tiktok') {
+    try {
+      return await sendVideo(ctx, url, '', 'play_addr/best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/best')
+    } catch (primaryError) {
+      console.error('tiktok primary download error:', primaryError?.message || primaryError)
+      try {
+        await ctx.react('⏳').catch(() => {})
+        const fallback = await tiktokFallback(url)
+        await ctx.sock.sendMessage(ctx.jid, {
+          video: fallback.video,
+          mimetype: 'video/mp4',
+          fileName: `${fallback.title}.mp4`,
+          caption: `🎬 *${fallback.title}*\n🤖 RANDY SYSTEMS${fallback.sourceClean ? '\n✨ Fuente directa priorizada' : ''}`
+        }, { quoted: ctx.msg })
+        await ctx.react('✅').catch(() => {})
+        return
+      } catch (fallbackError) {
+        console.error('tiktok fallback error:', fallbackError?.message || fallbackError)
+        await ctx.react('❌').catch(() => {})
+        return ctx.reply('❌ TikTok rechazó ambas fuentes de descarga. Prueba de nuevo en unos minutos o con otro enlace público.')
+      }
+    }
+  }
+
   try {
-    const host = new URL(url).hostname.toLowerCase()
-    if (platform === 'tiktok' && !host.includes('tiktok.com')) return ctx.reply('❌ Ese enlace no parece ser de TikTok.')
-    if (platform === 'instagram' && !host.includes('instagram.com')) return ctx.reply('❌ Ese enlace no parece ser de Instagram.')
-
-    // yt-dlp exposes TikTok's play_addr as the direct video and marks download_addr
-    // as watermarked when TikTok reports that flag. Prefer play_addr first.
-    const format = platform === 'tiktok'
-      ? 'play_addr/best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/best'
-      : 'best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/best'
-
-    return await sendVideo(ctx, url, '', format)
+    return await sendVideo(ctx, url)
   } catch (error) {
     console.error(`${platform} download error:`, error)
     await ctx.react('❌').catch(() => {})
@@ -202,10 +261,10 @@ const mediaHelp = `📥 *DESCARGAS • RANDY SYSTEMS*
 🎬 *.ytvideo nombre/link* → alias rápido para video de YouTube.
 🎵 *.youtube.play nombre/link* → audio de YouTube.
 📹 *.youtube.video nombre/link* → video de YouTube.
-🎵 *.tiktok link* / *.tt link* → video de TikTok, priorizando la versión directa sin watermark cuando TikTok la ofrece.
+🎵 *.tiktok link* / *.tt link* → TikTok con doble proveedor y fuente directa priorizada.
 📸 *.instagram link* / *.ig link* → video/Reel público de Instagram.
 
-⚠️ Solo enlaces públicos. WhatsApp limita el tamaño de archivos; el bot usa un máximo de 45 MB.
+⚠️ Solo enlaces públicos. Máximo aproximado: 45 MB.
 Spotify se usa para identificar la canción; el bot no rompe el DRM de Spotify.`
 
 export const downloadCommands = {
