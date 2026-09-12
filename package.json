@@ -5,6 +5,7 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
+    "postinstall": "node scripts/patch-baileys-pairing.js",
     "start": "node src/index.js",
     "start:prod": "sh ./scripts/start-production.sh",
     "dev": "node --watch src/index.js",
