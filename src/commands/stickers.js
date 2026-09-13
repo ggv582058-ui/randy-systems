@@ -141,6 +141,19 @@ async function swm(ctx) {
   }
 }
 
+async function ske(ctx) {
+  try {
+    const webp = await mediaAsWebp(ctx)
+    const customName = ctx.args.join(' ').trim()
+    if (!customName) return ctx.reply('❌ Escribe el nombre. Ejemplo: *.ske Randy*')
+    const sticker = addStickerMetadata(webp, customName.slice(0, 100), '')
+    return ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
+  } catch (error) {
+    console.error('SKE sticker error:', error)
+    return ctx.reply('❌ No pude crear ese sticker. Responde a una imagen o sticker con *.ske Nombre*.')
+  }
+}
+
 async function sck(ctx) {
   try {
     const webp = await mediaAsWebp(ctx)
@@ -178,6 +191,7 @@ export const stickerCommands = {
   },
   s: async ctx => stickerCommands.sticker(ctx),
   cl,
+  ske,
   sck,
   cleansticker: sck,
   swm,
@@ -196,6 +210,7 @@ export const stickerCommands = {
     '🎨 *COMANDOS DE STICKERS*\n' +
     '• *.sticker* / *.s* → convierte una imagen en sticker.\n' +
     '• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n' +
+    '• *.ske Nombre* → sticker con SOLO el nombre que escribas, sin nombre del bot.\n' +
     '• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n' +
     '• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n' +
     '• *.toimg* → convierte un sticker en imagen.\n\n' +
