@@ -8,6 +8,81 @@ async function imageToWebp(buffer) {
     .toBuffer()
 }
 
+function escapeXml(value = '') {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;')
+}
+
+function wrapWords(text, maxChars) {
+  const words = String(text).trim().split(/\s+/).filter(Boolean)
+  const lines = []
+  let line = ''
+
+  for (const word of words) {
+    if (word.length > maxChars) {
+      if (line) {
+        lines.push(line)
+        line = ''
+      }
+      for (let i = 0; i < word.length; i += maxChars) lines.push(word.slice(i, i + maxChars))
+      continue
+    }
+
+    const candidate = line ? `${line} ${word}` : word
+    if (candidate.length <= maxChars) line = candidate
+    else {
+      if (line) lines.push(line)
+      line = word
+    }
+  }
+
+  if (line) lines.push(line)
+  return lines
+}
+
+function textStickerLayout(text) {
+  const clean = String(text).replace(/\s+/g, ' ').trim().slice(0, 220).toUpperCase()
+  const sizes = [92, 84, 76, 68, 60, 54, 48, 42, 38]
+
+  for (const fontSize of sizes) {
+    const maxChars = Math.max(5, Math.floor(390 / (fontSize * 0.56)))
+    const lines = wrapWords(clean, maxChars)
+    const lineHeight = Math.round(fontSize * 1.08)
+    if (lines.length <= 7 && lines.length * lineHeight <= 390) {
+      return { clean, lines, fontSize, lineHeight }
+    }
+  }
+
+  const fontSize = 34
+  const lineHeight = 38
+  return { clean, lines: wrapWords(clean, 18).slice(0, 9), fontSize, lineHeight }
+}
+
+async function textToSticker(text) {
+  const { lines, fontSize, lineHeight } = textStickerLayout(text)
+  const totalHeight = lines.length * lineHeight
+  const firstY = 256 - totalHeight / 2 + fontSize * 0.78
+  const tspans = lines
+    .map((line, index) => `<tspan x="52" y="${Math.round(firstY + index * lineHeight)}">${escapeXml(line)}</tspan>`)
+    .join('')
+
+  const svg = `
+    <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+      <rect width="512" height="512" rx="18" fill="#ffffff"/>
+      <text x="52" y="256" fill="#111111" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="700" letter-spacing="0">
+        ${tspans}
+      </text>
+    </svg>`
+
+  return sharp(Buffer.from(svg))
+    .webp({ quality: 90 })
+    .toBuffer()
+}
+
 function makeChunk(type, data) {
   const header = Buffer.alloc(8)
   header.write(type, 0, 4, 'ascii')
@@ -154,6 +229,18 @@ async function ske(ctx) {
   }
 }
 
+async function letr(ctx) {
+  try {
+    const text = ctx.args.join(' ').trim()
+    if (!text) return ctx.reply('❌ Escribe el texto. Ejemplo: *.letr hola*')
+    const sticker = await textToSticker(text)
+    return ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
+  } catch (error) {
+    console.error('LETR sticker error:', error)
+    return ctx.reply('❌ No pude crear el sticker de texto. Prueba con un texto más corto.')
+  }
+}
+
 async function sck(ctx) {
   try {
     const webp = await mediaAsWebp(ctx)
@@ -192,6 +279,7 @@ export const stickerCommands = {
   s: async ctx => stickerCommands.sticker(ctx),
   cl,
   ske,
+  letr,
   sck,
   cleansticker: sck,
   swm,
@@ -209,6 +297,7 @@ export const stickerCommands = {
   stickerinfo: async ctx => ctx.reply(
     '🎨 *COMANDOS DE STICKERS*\n' +
     '• *.sticker* / *.s* → convierte una imagen en sticker.\n' +
+    '• *.letr texto* → crea un sticker blanco con letras negras, estilo meme.\n' +
     '• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n' +
     '• *.ske Nombre* → sticker con SOLO el nombre que escribas, sin nombre del bot.\n' +
     '• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n' +
