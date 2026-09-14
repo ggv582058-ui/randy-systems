@@ -9,7 +9,7 @@ import { config } from '../config.js'
 
 async function imageToWebp(buffer) {
   return sharp(buffer)
-    .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .resize(512, 512, { fit: 'cover', position: 'centre' })
     .webp({ quality: 82 })
     .toBuffer()
 }
@@ -25,7 +25,7 @@ async function videoToWebp(buffer) {
       const args = [
         '-y', '-i', input,
         '-t', '8',
-        '-vf', 'fps=12,scale=512:512:force_original_aspect_ratio=decrease:flags=lanczos,pad=512:512:-1:-1:color=0x00000000',
+        '-vf', 'fps=12,scale=512:512:force_original_aspect_ratio=increase:flags=lanczos,crop=512:512',
         '-loop', '0',
         '-an',
         '-vsync', '0',
@@ -72,30 +72,26 @@ function wrapWords(text, maxChars) {
 }
 
 function textStickerLayout(text) {
-  const clean = String(text).replace(/\s+/g, ' ').trim().slice(0, 220).toUpperCase()
-  const sizes = [46, 42, 38, 34, 30, 28, 26]
+  const clean = String(text).replace(/\s+/g, ' ').trim().slice(0, 240).toUpperCase()
+  const sizes = [66, 60, 54, 48, 44, 40, 36, 32, 28]
   for (const fontSize of sizes) {
-    const maxChars = Math.max(10, Math.floor(430 / (fontSize * 0.52)))
+    const maxChars = Math.max(7, Math.floor(450 / (fontSize * 0.54)))
     const lines = wrapWords(clean, maxChars)
-    const lineHeight = Math.round(fontSize * 1.04)
-    if (lines.length <= 6 && lines.length * lineHeight <= 280) return { lines, fontSize, lineHeight }
+    const lineHeight = Math.round(fontSize * 1.12)
+    if (lines.length <= 7 && lines.length * lineHeight <= 430) return { lines, fontSize, lineHeight }
   }
-  return { lines: wrapWords(clean, 24).slice(0, 8), fontSize: 24, lineHeight: 28 }
+  return { lines: wrapWords(clean, 20).slice(0, 9), fontSize: 26, lineHeight: 31 }
 }
 
 async function textToSticker(text) {
   const { lines, fontSize, lineHeight } = textStickerLayout(text)
-  const longest = Math.max(...lines.map(line => line.length), 1)
-  const estimatedTextWidth = longest * fontSize * 0.52
-  const boxWidth = Math.max(220, Math.min(440, Math.ceil(estimatedTextWidth + 68)))
-  const boxHeight = Math.max(110, Math.min(340, Math.ceil(lines.length * lineHeight + 56)))
-  const boxX = Math.round((512 - boxWidth) / 2)
-  const boxY = Math.round((512 - boxHeight) / 2)
-  const textX = 256
-  const firstY = boxY + 28 + fontSize * 0.82
-  const tspans = lines.map((line, index) => `<tspan x="${textX}" y="${Math.round(firstY + index * lineHeight)}">${escapeXml(line)}</tspan>`).join('')
-  const svg = `<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><rect x="${boxX}" y="${boxY}" width="${boxWidth}" height="${boxHeight}" rx="12" fill="#ffffff"/><text fill="#111111" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="400" text-anchor="middle">${tspans}</text></svg>`
-  return sharp(Buffer.from(svg)).webp({ quality: 90 }).toBuffer()
+  const totalHeight = lines.length * lineHeight
+  const startY = Math.round((512 - totalHeight) / 2 + fontSize * 0.82)
+  const tspans = lines
+    .map((line, index) => `<tspan x="28" y="${Math.round(startY + index * lineHeight)}">${escapeXml(line)}</tspan>`)
+    .join('')
+  const svg = `<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" fill="#ffffff"/><text fill="#111111" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="400" letter-spacing="0">${tspans}</text></svg>`
+  return sharp(Buffer.from(svg)).webp({ quality: 92 }).toBuffer()
 }
 
 function makeChunk(type, data) {
@@ -243,5 +239,5 @@ export const stickerCommands = {
     try { const { buffer, type } = await ctx.downloadQuotedOrCurrent(); if (!type.includes('stickerMessage')) return ctx.reply('Responde a un sticker con .toimg'); const png = await sharp(buffer).png().toBuffer(); return ctx.sock.sendMessage(ctx.jid, { image: png, caption: '✅ Sticker convertido.' }, { quoted: ctx.msg }) }
     catch { return ctx.reply('❌ No pude convertir ese sticker.') }
   },
-  stickerinfo: async ctx => ctx.reply('🎨 *COMANDOS DE STICKERS*\n• *.sticker* / *.s* → convierte imagen o video corto en sticker.\n• *.letr texto* → sticker de texto en MAYÚSCULAS, con letra fina.\n• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n• *.ske Nombre* → sticker con SOLO el nombre que escribas, sin nombre del bot.\n• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n• *.toimg* → convierte un sticker en imagen.')
+  stickerinfo: async ctx => ctx.reply('🎨 *COMANDOS DE STICKERS*\n• *.sticker* / *.s* → convierte imagen o video corto en sticker.\n• *.letr texto* → sticker de texto en MAYÚSCULAS, fondo blanco completo y letra fina.\n• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n• *.ske Nombre* → sticker con SOLO el nombre que escribas, sin nombre del bot.\n• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n• *.toimg* → convierte un sticker en imagen.')
 }
