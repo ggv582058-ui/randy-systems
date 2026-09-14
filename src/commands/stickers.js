@@ -1,3 +1,9 @@
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { spawn } from 'node:child_process'
+import ffmpegPath from 'ffmpeg-static'
 import sharp from 'sharp'
 import { config } from '../config.js'
 
@@ -6,6 +12,36 @@ async function imageToWebp(buffer) {
     .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .webp({ quality: 82 })
     .toBuffer()
+}
+
+async function videoToWebp(buffer) {
+  const id = randomBytes(6).toString('hex')
+  const input = path.join(os.tmpdir(), `randy-${id}.mp4`)
+  const output = path.join(os.tmpdir(), `randy-${id}.webp`)
+
+  try {
+    await fs.writeFile(input, buffer)
+    await new Promise((resolve, reject) => {
+      const args = [
+        '-y', '-i', input,
+        '-t', '8',
+        '-vf', 'fps=12,scale=512:512:force_original_aspect_ratio=decrease:flags=lanczos,pad=512:512:-1:-1:color=0x00000000',
+        '-loop', '0',
+        '-an',
+        '-vsync', '0',
+        output
+      ]
+      const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+      let stderr = ''
+      proc.stderr.on('data', chunk => { stderr += String(chunk).slice(-4000) })
+      proc.on('error', reject)
+      proc.on('close', code => code === 0 ? resolve() : reject(new Error(`ffmpeg ${code}: ${stderr.slice(-800)}`)))
+    })
+    return await fs.readFile(output)
+  } finally {
+    await fs.rm(input, { force: true }).catch(() => {})
+    await fs.rm(output, { force: true }).catch(() => {})
+  }
 }
 
 function escapeXml(value = '') {
@@ -21,73 +57,45 @@ function wrapWords(text, maxChars) {
   const words = String(text).trim().split(/\s+/).filter(Boolean)
   const lines = []
   let line = ''
-
   for (const word of words) {
     if (word.length > maxChars) {
-      if (line) {
-        lines.push(line)
-        line = ''
-      }
+      if (line) { lines.push(line); line = '' }
       for (let i = 0; i < word.length; i += maxChars) lines.push(word.slice(i, i + maxChars))
       continue
     }
-
     const candidate = line ? `${line} ${word}` : word
     if (candidate.length <= maxChars) line = candidate
-    else {
-      if (line) lines.push(line)
-      line = word
-    }
+    else { if (line) lines.push(line); line = word }
   }
-
   if (line) lines.push(line)
   return lines
 }
 
 function textStickerLayout(text) {
   const clean = String(text).replace(/\s+/g, ' ').trim().slice(0, 220).toUpperCase()
-  const sizes = [58, 54, 50, 46, 42, 38, 34, 30, 28]
-
+  const sizes = [46, 42, 38, 34, 30, 28, 26]
   for (const fontSize of sizes) {
-    const maxChars = Math.max(7, Math.floor(320 / (fontSize * 0.56)))
+    const maxChars = Math.max(10, Math.floor(430 / (fontSize * 0.52)))
     const lines = wrapWords(clean, maxChars)
-    const lineHeight = Math.round(fontSize * 1.08)
-    if (lines.length <= 7 && lines.length * lineHeight <= 300) {
-      return { clean, lines, fontSize, lineHeight }
-    }
+    const lineHeight = Math.round(fontSize * 1.04)
+    if (lines.length <= 6 && lines.length * lineHeight <= 280) return { lines, fontSize, lineHeight }
   }
-
-  const fontSize = 26
-  const lineHeight = 30
-  return { clean, lines: wrapWords(clean, 20).slice(0, 9), fontSize, lineHeight }
+  return { lines: wrapWords(clean, 24).slice(0, 8), fontSize: 24, lineHeight: 28 }
 }
 
 async function textToSticker(text) {
   const { lines, fontSize, lineHeight } = textStickerLayout(text)
   const longest = Math.max(...lines.map(line => line.length), 1)
-  const estimatedTextWidth = longest * fontSize * 0.56
-  const boxWidth = Math.max(170, Math.min(390, Math.ceil(estimatedTextWidth + 52)))
-  const boxHeight = Math.max(120, Math.min(390, Math.ceil(lines.length * lineHeight + 52)))
+  const estimatedTextWidth = longest * fontSize * 0.52
+  const boxWidth = Math.max(220, Math.min(440, Math.ceil(estimatedTextWidth + 68)))
+  const boxHeight = Math.max(110, Math.min(340, Math.ceil(lines.length * lineHeight + 56)))
   const boxX = Math.round((512 - boxWidth) / 2)
   const boxY = Math.round((512 - boxHeight) / 2)
-  const textX = boxX + 26
-  const firstY = boxY + 26 + fontSize * 0.82
-
-  const tspans = lines
-    .map((line, index) => `<tspan x="${textX}" y="${Math.round(firstY + index * lineHeight)}">${escapeXml(line)}</tspan>`)
-    .join('')
-
-  const svg = `
-    <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-      <rect x="${boxX}" y="${boxY}" width="${boxWidth}" height="${boxHeight}" rx="12" fill="#ffffff"/>
-      <text fill="#111111" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="700" letter-spacing="0">
-        ${tspans}
-      </text>
-    </svg>`
-
-  return sharp(Buffer.from(svg))
-    .webp({ quality: 90 })
-    .toBuffer()
+  const textX = 256
+  const firstY = boxY + 28 + fontSize * 0.82
+  const tspans = lines.map((line, index) => `<tspan x="${textX}" y="${Math.round(firstY + index * lineHeight)}">${escapeXml(line)}</tspan>`).join('')
+  const svg = `<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><rect x="${boxX}" y="${boxY}" width="${boxWidth}" height="${boxHeight}" rx="12" fill="#ffffff"/><text fill="#111111" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="400" text-anchor="middle">${tspans}</text></svg>`
+  return sharp(Buffer.from(svg)).webp({ quality: 90 }).toBuffer()
 }
 
 function makeChunk(type, data) {
@@ -98,10 +106,7 @@ function makeChunk(type, data) {
 }
 
 function parseWebpChunks(webp) {
-  if (webp.length < 12 || webp.toString('ascii', 0, 4) !== 'RIFF' || webp.toString('ascii', 8, 12) !== 'WEBP') {
-    throw new Error('El archivo no es un WebP válido.')
-  }
-
+  if (webp.length < 12 || webp.toString('ascii', 0, 4) !== 'RIFF' || webp.toString('ascii', 8, 12) !== 'WEBP') throw new Error('El archivo no es un WebP válido.')
   const chunks = []
   let offset = 12
   while (offset + 8 <= webp.length) {
@@ -140,21 +145,8 @@ function writeUInt24LE(buffer, value, offset) {
 }
 
 function buildStickerExif(pack, author) {
-  const metadata = Buffer.from(JSON.stringify({
-    'sticker-pack-id': 'randy-systems',
-    'sticker-pack-name': pack,
-    'sticker-pack-publisher': author,
-    emojis: ['⚡']
-  }), 'utf8')
-
-  const exif = Buffer.concat([
-    Buffer.from([
-      0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00,
-      0x01, 0x00, 0x41, 0x57, 0x07, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x16, 0x00, 0x00, 0x00
-    ]),
-    metadata
-  ])
+  const metadata = Buffer.from(JSON.stringify({ 'sticker-pack-id': 'randy-systems', 'sticker-pack-name': pack, 'sticker-pack-publisher': author, emojis: ['⚡'] }), 'utf8')
+  const exif = Buffer.concat([Buffer.from([0x49,0x49,0x2a,0x00,0x08,0x00,0x00,0x00,0x01,0x00,0x41,0x57,0x07,0x00,0x00,0x00,0x00,0x00,0x16,0x00,0x00,0x00]), metadata])
   exif.writeUInt32LE(metadata.length, 14)
   return exif
 }
@@ -163,41 +155,19 @@ function addStickerMetadata(webp, pack, author) {
   const chunks = parseWebpChunks(webp)
   const filtered = chunks.filter(chunk => chunk.type !== 'EXIF')
   let vp8x = filtered.find(chunk => chunk.type === 'VP8X')
-
-  if (vp8x) {
-    vp8x.data[0] |= 0x08
-  } else {
-    let width = 0
-    let height = 0
-    let hasAlpha = false
+  if (vp8x) vp8x.data[0] |= 0x08
+  else {
+    let width = 0, height = 0, hasAlpha = false
     const vp8 = filtered.find(chunk => chunk.type === 'VP8 ')
     const vp8l = filtered.find(chunk => chunk.type === 'VP8L')
-
-    if (vp8?.data?.length >= 10) {
-      width = vp8.data.readUInt16LE(6) & 0x3fff
-      height = vp8.data.readUInt16LE(8) & 0x3fff
-    } else if (vp8l?.data?.length >= 5) {
-      const bits = vp8l.data.readUInt32LE(1)
-      width = (bits & 0x3fff) + 1
-      height = ((bits >>> 14) & 0x3fff) + 1
-      hasAlpha = Boolean((bits >>> 28) & 1)
-    }
-
+    if (vp8?.data?.length >= 10) { width = vp8.data.readUInt16LE(6) & 0x3fff; height = vp8.data.readUInt16LE(8) & 0x3fff }
+    else if (vp8l?.data?.length >= 5) { const bits = vp8l.data.readUInt32LE(1); width = (bits & 0x3fff) + 1; height = ((bits >>> 14) & 0x3fff) + 1; hasAlpha = Boolean((bits >>> 28) & 1) }
     if (!width || !height) throw new Error('No pude leer las dimensiones del sticker.')
-
-    const data = Buffer.alloc(10)
-    data[0] = 0x08 | (hasAlpha ? 0x10 : 0)
-    writeUInt24LE(data, width - 1, 4)
-    writeUInt24LE(data, height - 1, 7)
-    vp8x = { type: 'VP8X', data }
-    filtered.unshift(vp8x)
+    const data = Buffer.alloc(10); data[0] = 0x08 | (hasAlpha ? 0x10 : 0); writeUInt24LE(data, width - 1, 4); writeUInt24LE(data, height - 1, 7); vp8x = { type: 'VP8X', data }; filtered.unshift(vp8x)
   }
-
   const exifChunk = { type: 'EXIF', data: buildStickerExif(pack, author) }
   const xmpIndex = filtered.findIndex(chunk => chunk.type === 'XMP ')
-  if (xmpIndex >= 0) filtered.splice(xmpIndex, 0, exifChunk)
-  else filtered.push(exifChunk)
-
+  if (xmpIndex >= 0) filtered.splice(xmpIndex, 0, exifChunk); else filtered.push(exifChunk)
   return rebuildWebp(filtered)
 }
 
@@ -211,16 +181,10 @@ async function mediaAsWebp(ctx) {
 async function swm(ctx) {
   try {
     const webp = await mediaAsWebp(ctx)
-    const text = ctx.args.join(' ').trim()
-    const [packPart, authorPart] = text.split('|').map(value => value.trim())
-    const pack = (packPart || 'RANDY SYSTEMS').slice(0, 100)
-    const author = (authorPart || 'Randy').slice(0, 100)
-    const sticker = addStickerMetadata(webp, pack, author)
+    const [packPart, authorPart] = ctx.args.join(' ').trim().split('|').map(value => value.trim())
+    const sticker = addStickerMetadata(webp, (packPart || 'RANDY SYSTEMS').slice(0, 100), (authorPart || 'Randy').slice(0, 100))
     return ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
-  } catch (error) {
-    console.error('SWM sticker error:', error)
-    return ctx.reply('❌ No pude cambiar el nombre del sticker. Responde a una imagen o sticker con *.swm Nombre | Autor*.')
-  }
+  } catch (error) { console.error('SWM sticker error:', error); return ctx.reply('❌ No pude cambiar el nombre del sticker. Responde a una imagen o sticker con *.swm Nombre | Autor*.') }
 }
 
 async function ske(ctx) {
@@ -228,35 +192,21 @@ async function ske(ctx) {
     const webp = await mediaAsWebp(ctx)
     const customName = ctx.args.join(' ').trim()
     if (!customName) return ctx.reply('❌ Escribe el nombre. Ejemplo: *.ske Randy*')
-    const sticker = addStickerMetadata(webp, customName.slice(0, 100), '')
-    return ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
-  } catch (error) {
-    console.error('SKE sticker error:', error)
-    return ctx.reply('❌ No pude crear ese sticker. Responde a una imagen o sticker con *.ske Nombre*.')
-  }
+    return ctx.sock.sendMessage(ctx.jid, { sticker: addStickerMetadata(webp, customName.slice(0, 100), '') }, { quoted: ctx.msg })
+  } catch (error) { console.error('SKE sticker error:', error); return ctx.reply('❌ No pude crear ese sticker. Responde a una imagen o sticker con *.ske Nombre*.') }
 }
 
 async function letr(ctx) {
   try {
     const text = ctx.args.join(' ').trim()
     if (!text) return ctx.reply('❌ Escribe el texto. Ejemplo: *.letr hola*')
-    const sticker = await textToSticker(text)
-    return ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
-  } catch (error) {
-    console.error('LETR sticker error:', error)
-    return ctx.reply('❌ No pude crear el sticker de texto. Prueba con un texto más corto.')
-  }
+    return ctx.sock.sendMessage(ctx.jid, { sticker: await textToSticker(text) }, { quoted: ctx.msg })
+  } catch (error) { console.error('LETR sticker error:', error); return ctx.reply('❌ No pude crear el sticker de texto. Prueba con un texto más corto.') }
 }
 
 async function sck(ctx) {
-  try {
-    const webp = await mediaAsWebp(ctx)
-    const cleanSticker = stripStickerMetadata(webp)
-    return ctx.sock.sendMessage(ctx.jid, { sticker: cleanSticker }, { quoted: ctx.msg })
-  } catch (error) {
-    console.error('SCK sticker error:', error)
-    return ctx.reply('❌ No pude limpiar ese sticker. Responde directamente al sticker o imagen con *.sck*.')
-  }
+  try { const webp = await mediaAsWebp(ctx); return ctx.sock.sendMessage(ctx.jid, { sticker: stripStickerMetadata(webp) }, { quoted: ctx.msg }) }
+  catch (error) { console.error('SCK sticker error:', error); return ctx.reply('❌ No pude limpiar ese sticker. Responde directamente al sticker o imagen con *.sck*.') }
 }
 
 async function cl(ctx) {
@@ -264,24 +214,22 @@ async function cl(ctx) {
     const webp = await mediaAsWebp(ctx)
     const pack = String(ctx.msg?.pushName || ctx.senderNumber || 'Usuario').slice(0, 100)
     const author = String(config.botName || 'RANDY SYSTEMS').slice(0, 100)
-    const sticker = addStickerMetadata(webp, pack, author)
-    return ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
-  } catch (error) {
-    console.error('CL sticker error:', error)
-    return ctx.reply('❌ Responde a una imagen o sticker con *.cl*. El pack llevará tu nombre y el autor será RANDY SYSTEMS.')
-  }
+    return ctx.sock.sendMessage(ctx.jid, { sticker: addStickerMetadata(webp, pack, author) }, { quoted: ctx.msg })
+  } catch (error) { console.error('CL sticker error:', error); return ctx.reply('❌ Responde a una imagen o sticker con *.cl*. El pack llevará tu nombre y el autor será RANDY SYSTEMS.') }
 }
 
 export const stickerCommands = {
   sticker: async ctx => {
     try {
-      const { buffer, type } = await ctx.downloadQuotedOrCurrent()
-      if (!type.includes('imageMessage')) return ctx.reply('Por ahora .sticker acepta imágenes. Responde a una imagen o envíala con .sticker')
-      const webp = await imageToWebp(buffer)
-      return ctx.sock.sendMessage(ctx.jid, { sticker: webp }, { quoted: ctx.msg })
-    } catch {
-      return ctx.reply('❌ Responde a una imagen o envía una imagen con .sticker')
-    }
+      const { buffer, type, content } = await ctx.downloadQuotedOrCurrent()
+      if (type.includes('imageMessage')) return ctx.sock.sendMessage(ctx.jid, { sticker: await imageToWebp(buffer) }, { quoted: ctx.msg })
+      if (type.includes('videoMessage')) {
+        const seconds = Number(content?.seconds || 0)
+        if (seconds > 8) return ctx.reply('❌ El video debe durar máximo 8 segundos para convertirlo en sticker.')
+        return ctx.sock.sendMessage(ctx.jid, { sticker: await videoToWebp(buffer) }, { quoted: ctx.msg })
+      }
+      return ctx.reply('❌ Responde a una imagen o video corto con *.s* o *.sticker*.')
+    } catch (error) { console.error('Sticker error:', error); return ctx.reply('❌ No pude crear ese sticker. Usa una imagen o un video corto.') }
   },
   s: async ctx => stickerCommands.sticker(ctx),
   cl,
@@ -292,24 +240,8 @@ export const stickerCommands = {
   swm,
   stickerwm: swm,
   toimg: async ctx => {
-    try {
-      const { buffer, type } = await ctx.downloadQuotedOrCurrent()
-      if (!type.includes('stickerMessage')) return ctx.reply('Responde a un sticker con .toimg')
-      const png = await sharp(buffer).png().toBuffer()
-      return ctx.sock.sendMessage(ctx.jid, { image: png, caption: '✅ Sticker convertido.' }, { quoted: ctx.msg })
-    } catch {
-      return ctx.reply('❌ No pude convertir ese sticker.')
-    }
+    try { const { buffer, type } = await ctx.downloadQuotedOrCurrent(); if (!type.includes('stickerMessage')) return ctx.reply('Responde a un sticker con .toimg'); const png = await sharp(buffer).png().toBuffer(); return ctx.sock.sendMessage(ctx.jid, { image: png, caption: '✅ Sticker convertido.' }, { quoted: ctx.msg }) }
+    catch { return ctx.reply('❌ No pude convertir ese sticker.') }
   },
-  stickerinfo: async ctx => ctx.reply(
-    '🎨 *COMANDOS DE STICKERS*\n' +
-    '• *.sticker* / *.s* → convierte una imagen en sticker.\n' +
-    '• *.letr texto* → crea un sticker blanco con letras negras, estilo meme.\n' +
-    '• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n' +
-    '• *.ske Nombre* → sticker con SOLO el nombre que escribas, sin nombre del bot.\n' +
-    '• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n' +
-    '• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n' +
-    '• *.toimg* → convierte un sticker en imagen.\n\n' +
-    'Tip: responde directamente a la imagen o sticker que quieres usar.'
-  )
+  stickerinfo: async ctx => ctx.reply('🎨 *COMANDOS DE STICKERS*\n• *.sticker* / *.s* → convierte imagen o video corto en sticker.\n• *.letr texto* → sticker de texto en MAYÚSCULAS, con letra fina.\n• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n• *.ske Nombre* → sticker con SOLO el nombre que escribas, sin nombre del bot.\n• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n• *.toimg* → convierte un sticker en imagen.')
 }
