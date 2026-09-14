@@ -2,6 +2,25 @@ import { downloadContentFromMessage, getContentType } from '@whiskeysockets/bail
 import { config } from '../config.js'
 import { jidToNumber, quotedMessage, quotedParticipant } from './utils.js'
 
+const GROUP_METADATA_COMMANDS = new Set([
+  'menu',
+  'admins', 'tagall', 'hidetag', 'kick', 'add', 'promote', 'demote',
+  'link', 'revoke', 'subject', 'desc', 'open', 'close', 'groupinfo'
+])
+
+const GROUP_METADATA_TTL_MS = 30_000
+const groupMetadataCache = new Map()
+
+async function getGroupMetadata(sock, jid) {
+  const cached = groupMetadataCache.get(jid)
+  const now = Date.now()
+  if (cached && now - cached.at < GROUP_METADATA_TTL_MS) return cached.value
+
+  const value = await sock.groupMetadata(jid).catch(() => null)
+  if (value) groupMetadataCache.set(jid, { at: now, value })
+  return value
+}
+
 export async function buildContext(sock, msg, parsed) {
   const jid = msg.key.remoteJid
   const isGroup = jid?.endsWith('@g.us')
@@ -12,8 +31,11 @@ export async function buildContext(sock, msg, parsed) {
   let isAdmin = false
   let isBotAdmin = false
 
-  if (isGroup) {
-    groupMetadata = await sock.groupMetadata(jid).catch(() => null)
+  // Most commands (stickers, downloads, IA, tools, etc.) do not need a
+  // WhatsApp group-metadata network request. Skipping it makes them react
+  // immediately instead of waiting on an extra round trip to WhatsApp.
+  if (isGroup && GROUP_METADATA_COMMANDS.has(parsed.command)) {
+    groupMetadata = await getGroupMetadata(sock, jid)
     participants = groupMetadata?.participants || []
     const me = sock.user?.id
     const senderP = participants.find(p => p.id === sender || jidToNumber(p.id) === jidToNumber(sender))
