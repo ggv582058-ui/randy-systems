@@ -46,34 +46,41 @@ function wrapWords(text, maxChars) {
 
 function textStickerLayout(text) {
   const clean = String(text).replace(/\s+/g, ' ').trim().slice(0, 220).toUpperCase()
-  const sizes = [92, 84, 76, 68, 60, 54, 48, 42, 38]
+  const sizes = [58, 54, 50, 46, 42, 38, 34, 30, 28]
 
   for (const fontSize of sizes) {
-    const maxChars = Math.max(5, Math.floor(390 / (fontSize * 0.56)))
+    const maxChars = Math.max(7, Math.floor(320 / (fontSize * 0.56)))
     const lines = wrapWords(clean, maxChars)
     const lineHeight = Math.round(fontSize * 1.08)
-    if (lines.length <= 7 && lines.length * lineHeight <= 390) {
+    if (lines.length <= 7 && lines.length * lineHeight <= 300) {
       return { clean, lines, fontSize, lineHeight }
     }
   }
 
-  const fontSize = 34
-  const lineHeight = 38
-  return { clean, lines: wrapWords(clean, 18).slice(0, 9), fontSize, lineHeight }
+  const fontSize = 26
+  const lineHeight = 30
+  return { clean, lines: wrapWords(clean, 20).slice(0, 9), fontSize, lineHeight }
 }
 
 async function textToSticker(text) {
   const { lines, fontSize, lineHeight } = textStickerLayout(text)
-  const totalHeight = lines.length * lineHeight
-  const firstY = 256 - totalHeight / 2 + fontSize * 0.78
+  const longest = Math.max(...lines.map(line => line.length), 1)
+  const estimatedTextWidth = longest * fontSize * 0.56
+  const boxWidth = Math.max(170, Math.min(390, Math.ceil(estimatedTextWidth + 52)))
+  const boxHeight = Math.max(120, Math.min(390, Math.ceil(lines.length * lineHeight + 52)))
+  const boxX = Math.round((512 - boxWidth) / 2)
+  const boxY = Math.round((512 - boxHeight) / 2)
+  const textX = boxX + 26
+  const firstY = boxY + 26 + fontSize * 0.82
+
   const tspans = lines
-    .map((line, index) => `<tspan x="52" y="${Math.round(firstY + index * lineHeight)}">${escapeXml(line)}</tspan>`)
+    .map((line, index) => `<tspan x="${textX}" y="${Math.round(firstY + index * lineHeight)}">${escapeXml(line)}</tspan>`)
     .join('')
 
   const svg = `
     <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-      <rect width="512" height="512" rx="18" fill="#ffffff"/>
-      <text x="52" y="256" fill="#111111" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="700" letter-spacing="0">
+      <rect x="${boxX}" y="${boxY}" width="${boxWidth}" height="${boxHeight}" rx="12" fill="#ffffff"/>
+      <text fill="#111111" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="700" letter-spacing="0">
         ${tspans}
       </text>
     </svg>`
