@@ -1,0 +1,24 @@
+services:
+  - type: worker
+    name: randy-reseller-bot
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    maxShutdownDelaySeconds: 30
+    disk:
+      name: reseller-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        value: "7883560984"
+      - key: STORE_NAME
+        value: RANDY RESELLER SYSTEMS
+      - key: SUPPORT_USERNAME
+        value: "@Randy_zt"
+      - key: DATABASE_PATH
+        value: /opt/render/project/src/data/reseller.db
