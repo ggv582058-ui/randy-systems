@@ -46,6 +46,15 @@ class DatabaseTests(unittest.TestCase):
             self.db.purchase(2, self.product)
         self.assertEqual(self.db.product(self.product)["stock"], 1)
 
+    def test_partner_credentials_bind_once(self):
+        self.db.ensure_user(222, "socio", "Socio", False)
+        self.db.create_partner("partner1", "secret123")
+        self.assertFalse(self.db.activate_partner("partner1", "wrong", 222))
+        self.assertTrue(self.db.activate_partner("partner1", "secret123", 222))
+        self.db.ensure_user(333, "otro", "Otro", False)
+        self.assertFalse(self.db.activate_partner("partner1", "secret123", 333))
+        self.assertEqual(self.db.user(222)["role"], "reseller")
+
 
 if __name__ == "__main__":
     unittest.main()
