@@ -10,6 +10,7 @@ from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, 
 
 from config import load_settings
 from database import Database, InsufficientBalance, NotApproved, NotFound, OutOfStock, StoreError
+from health import start_health_server
 
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
@@ -458,6 +459,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 def main() -> None:
     db.initialize()
+    start_health_server()
     app: Application = ApplicationBuilder().token(settings.bot_token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))
