@@ -13,6 +13,7 @@ Bot de Telegram para administrar revendedores y entregar automáticamente licenc
 - Historial contable, órdenes y estadísticas.
 - Compra y aprobación transaccionales para evitar cobrar o entregar dos veces.
 - Archivo `render.yaml` y disco persistente para funcionamiento 24/7.
+- Endpoint `/health` para que Render supervise el servicio.
 
 > Usa el bot únicamente para productos digitales que tengas autorización de vender. Nunca cargues claves obtenidas sin permiso.
 
