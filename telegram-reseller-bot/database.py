@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
+import hmac
+import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -129,8 +132,63 @@ class Database:
                     ON inventory_keys(product_id, status);
                 CREATE INDEX IF NOT EXISTS idx_topups_status ON topups(status);
                 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, id DESC);
+
+                CREATE TABLE IF NOT EXISTS partner_accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    login TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    password_hash TEXT NOT NULL,
+                    password_salt TEXT NOT NULL,
+                    telegram_id INTEGER UNIQUE REFERENCES users(telegram_id),
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS product_files (
+                    product_id INTEGER PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE,
+                    file_id TEXT NOT NULL,
+                    file_name TEXT NOT NULL,
+                    uploaded_at TEXT NOT NULL
+                );
                 """
             )
+
+    def create_partner(self, login: str, password: str) -> None:
+        login = login.strip()
+        if len(login) < 3 or len(password) < 6:
+            raise ValueError("Usuario mínimo 3 caracteres y contraseña mínimo 6")
+        salt = os.urandom(16)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 210_000)
+        with self.transaction() as con:
+            con.execute(
+                "INSERT INTO partner_accounts(login,password_hash,password_salt,created_at) VALUES(?,?,?,?)",
+                (login, digest.hex(), salt.hex(), utcnow()),
+            )
+
+    def activate_partner(self, login: str, password: str, telegram_id: int) -> bool:
+        with self.transaction() as con:
+            row = con.execute(
+                "SELECT * FROM partner_accounts WHERE login=? COLLATE NOCASE AND active=1", (login.strip(),)
+            ).fetchone()
+            if not row or row["telegram_id"] not in (None, telegram_id):
+                return False
+            digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(row["password_salt"]), 210_000)
+            if not hmac.compare_digest(digest.hex(), row["password_hash"]):
+                return False
+            con.execute("UPDATE partner_accounts SET telegram_id=? WHERE id=?", (telegram_id, row["id"]))
+            con.execute("UPDATE users SET role='reseller', requested_access=0, updated_at=? WHERE telegram_id=?", (utcnow(), telegram_id))
+            return True
+
+    def set_product_file(self, product_id: int, file_id: str, file_name: str) -> None:
+        with self.transaction() as con:
+            con.execute(
+                """INSERT INTO product_files(product_id,file_id,file_name,uploaded_at) VALUES(?,?,?,?)
+                   ON CONFLICT(product_id) DO UPDATE SET file_id=excluded.file_id,file_name=excluded.file_name,uploaded_at=excluded.uploaded_at""",
+                (product_id, file_id, file_name, utcnow()),
+            )
+
+    def reseller_ids(self) -> list[int]:
+        with self.connect() as con:
+            return [r[0] for r in con.execute("SELECT telegram_id FROM users WHERE role='reseller'").fetchall()]
 
     def ensure_user(self, telegram_id: int, username: str | None, full_name: str, is_admin: bool) -> sqlite3.Row:
         now = utcnow()
@@ -337,6 +395,7 @@ class Database:
                 "key": key["secret_value"],
                 "price_cents": product["price_cents"],
                 "balance_cents": balance,
+                "file": con.execute("SELECT file_id,file_name FROM product_files WHERE product_id=?", (product_id,)).fetchone(),
             }
 
     def history(self, user_id: int, limit: int = 10) -> list[sqlite3.Row]:
