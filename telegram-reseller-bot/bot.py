@@ -6,6 +6,7 @@ import html
 import logging
 import os
 import signal
+import sqlite3
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
@@ -26,8 +27,9 @@ db = Database(settings.database_path)
 
 ADMIN_MENU = ReplyKeyboardMarkup(
     [[KeyboardButton("📦 Productos"), KeyboardButton("🔑 Añadir keys")],
+     [KeyboardButton("📎 Archivos"), KeyboardButton("➕ Crear socio")],
      [KeyboardButton("👥 Revendedores"), KeyboardButton("💳 Recargas")],
-     [KeyboardButton("📊 Estadísticas"), KeyboardButton("👤 Vista revendedor")]],
+     [KeyboardButton("📢 Anuncios"), KeyboardButton("📊 Estadísticas")]],
     resize_keyboard=True,
 )
 USER_MENU = ReplyKeyboardMarkup(
@@ -36,7 +38,9 @@ USER_MENU = ReplyKeyboardMarkup(
      [KeyboardButton("🆘 Soporte")]],
     resize_keyboard=True,
 )
-PENDING_MENU = ReplyKeyboardMarkup([[KeyboardButton("📨 Solicitar acceso")]], resize_keyboard=True)
+PENDING_MENU = ReplyKeyboardMarkup(
+    [[KeyboardButton("🔐 Iniciar sesión"), KeyboardButton("📨 Solicitar acceso")]], resize_keyboard=True
+)
 
 
 def money(cents: int) -> str:
@@ -232,6 +236,10 @@ async def begin_add_keys(update: Update) -> None:
     await update.effective_message.reply_text("🔑 Selecciona el producto:", reply_markup=product_buttons("addkeys", active_only=False))
 
 
+async def begin_product_file(update: Update) -> None:
+    await update.effective_message.reply_text("📎 Selecciona el producto:", reply_markup=product_buttons("addfile", active_only=False))
+
+
 async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = current_user(update)
     text = (update.effective_message.text or "").strip()
@@ -245,11 +253,14 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         await access_request(update, context)
         return
+    if not admin_panel and text == "🔐 Iniciar sesión":
+        context.user_data["flow"] = {"name": "partner_login"}
+        await update.effective_message.reply_text("👤 Escribe el usuario que te dio el Admin:")
+        return
+    if await handle_flow(update, context):
+        return
     if user["role"] not in ("reseller", "admin"):
         await send_home(update, context)
-        return
-
-    if await handle_flow(update, context):
         return
 
     if not admin_panel and text == "🛒 Comprar keys":
@@ -266,6 +277,14 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await show_products_admin(update)
     elif admin_panel and user["role"] == "admin" and text == "🔑 Añadir keys":
         await begin_add_keys(update)
+    elif admin_panel and user["role"] == "admin" and text == "📎 Archivos":
+        await begin_product_file(update)
+    elif admin_panel and user["role"] == "admin" and text == "➕ Crear socio":
+        context.user_data["flow"] = {"name": "partner_create_login"}
+        await update.effective_message.reply_text("👤 Escribe el usuario para el socio:")
+    elif admin_panel and user["role"] == "admin" and text == "📢 Anuncios":
+        context.user_data["flow"] = {"name": "broadcast"}
+        await update.effective_message.reply_text("📢 Envía el mensaje, foto o archivo que recibirán todos los socios.")
     elif admin_panel and user["role"] == "admin" and text == "👥 Revendedores":
         await show_resellers(update)
     elif admin_panel and user["role"] == "admin" and text == "💳 Recargas":
@@ -284,6 +303,52 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return False
     message = update.effective_message
     text = (message.text or "").strip()
+
+    if flow["name"] == "partner_login":
+        flow["name"], flow["login"] = "partner_password", text
+        await message.reply_text("🔑 Escribe tu contraseña:")
+        return True
+    if flow["name"] == "partner_password":
+        ok = db.activate_partner(flow["login"], text, message.from_user.id)
+        context.user_data.pop("flow", None)
+        if not ok:
+            await message.reply_text("❌ Usuario o contraseña incorrectos, o la cuenta ya fue vinculada.", reply_markup=PENDING_MENU)
+        else:
+            await message.reply_text("✅ Cuenta vinculada. Ya eres socio revendedor.", reply_markup=USER_MENU)
+        return True
+    if flow["name"] == "partner_create_login":
+        flow["name"], flow["login"] = "partner_create_password", text
+        await message.reply_text("🔑 Escribe una contraseña de mínimo 6 caracteres:")
+        return True
+    if flow["name"] == "partner_create_password":
+        try:
+            db.create_partner(flow["login"], text)
+        except (ValueError, sqlite3.IntegrityError) as exc:
+            await message.reply_text(f"❌ {exc}")
+            return True
+        login = flow["login"]
+        context.user_data.pop("flow", None)
+        await message.reply_text(f"✅ Socio creado.\nUsuario: <code>{html.escape(login)}</code>\nContraseña: <code>{html.escape(text)}</code>", parse_mode=ParseMode.HTML, reply_markup=ADMIN_MENU)
+        return True
+    if flow["name"] == "broadcast":
+        sent = failed = 0
+        for target in db.reseller_ids():
+            try:
+                await reseller_bot(context).copy_message(target, message.chat_id, message.message_id)
+                sent += 1
+            except Exception:
+                failed += 1
+        context.user_data.pop("flow", None)
+        await message.reply_text(f"✅ Anuncio enviado: {sent}\nNo entregados: {failed}", reply_markup=ADMIN_MENU)
+        return True
+    if flow["name"] == "product_file":
+        if not message.document:
+            await message.reply_text("❌ Envía el archivo como documento.")
+            return True
+        db.set_product_file(flow["product_id"], message.document.file_id, message.document.file_name or "producto")
+        context.user_data.pop("flow", None)
+        await message.reply_text("✅ Archivo vinculado al producto.", reply_markup=ADMIN_MENU)
+        return True
 
     if flow["name"] == "topup_amount":
         try:
@@ -412,6 +477,14 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.message.reply_text("🔑 Envía las keys, <b>una por línea</b>.", parse_mode=ParseMode.HTML)
         return
 
+    if data.startswith("addfile:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            return
+        product_id = int(data.split(":")[1])
+        context.user_data["flow"] = {"name": "product_file", "product_id": product_id}
+        await query.message.reply_text("📎 Envía el archivo como documento.")
+        return
+
     if data.startswith("buy:"):
         if admin_panel:
             await query.answer("Usa el bot de revendedores", show_alert=True)
@@ -450,6 +523,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Guarda esta key en un lugar seguro.",
             parse_mode=ParseMode.HTML,
         )
+        if sale["file"]:
+            await query.message.reply_document(sale["file"]["file_id"], filename=sale["file"]["file_name"], caption="📎 Archivo del producto")
         return
 
     if data == "cancel":
