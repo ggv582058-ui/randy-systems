@@ -1,11 +1,11 @@
 # RANDY RESELLER SYSTEMS
 
-Bot de Telegram para administrar revendedores y entregar automáticamente licencias o códigos digitales de inventario propio.
+Dos bots de Telegram conectados al mismo inventario: uno privado para el Admin y otro para los revendedores, con entrega automática de licencias o códigos digitales de inventario propio.
 
 ## Incluye
 
 - Acceso restringido: solo el Admin puede aprobar revendedores.
-- Panel Admin y panel Regular separados.
+- Bot Admin privado y bot de revendedores completamente separados.
 - Productos, precios, activación/desactivación y stock.
 - Carga masiva de keys, una por línea, con bloqueo de duplicados.
 - Recargas manuales con comprobante y aprobación/rechazo del Admin.
@@ -19,12 +19,13 @@ Bot de Telegram para administrar revendedores y entregar automáticamente licenc
 
 ## Configuración rápida
 
-1. Habla con `@BotFather`, crea tu bot y guarda el token de forma privada.
+1. Habla con `@BotFather`, crea dos bots y guarda ambos tokens de forma privada.
 2. Obtén tu ID numérico de Telegram.
 3. Copia `.env.example` como `.env` y completa:
 
 ```env
 TELEGRAM_BOT_TOKEN=tu_token_privado
+ADMIN_BOT_TOKEN=token_privado_del_bot_admin
 ADMIN_IDS=7883560984
 STORE_NAME=RANDY RESELLER SYSTEMS
 SUPPORT_USERNAME=@Randy_zt
@@ -43,7 +44,7 @@ python bot.py
 
 ## Uso
 
-- El Admin abre `/start` y administra desde los botones.
+- El Admin abre `/start` en su bot privado y administra desde los botones.
 - Un usuario nuevo pulsa **Solicitar acceso**.
 - El Admin recibe **Aprobar / Rechazar**.
 - El revendedor solicita una recarga y manda comprobante.
@@ -57,7 +58,7 @@ PYTHONPATH=. python -m unittest discover -s tests -v
 
 ## Render
 
-Sube el proyecto a GitHub y crea un Blueprint usando `render.yaml`. Tu ID Admin (`7883560984`) ya está configurado; Render únicamente pedirá `TELEGRAM_BOT_TOKEN`. El disco conserva usuarios, saldo, órdenes e inventario entre reinicios. El servicio con disco funciona en una sola instancia, que es lo correcto para SQLite y el long polling de Telegram.
+Sube el proyecto a GitHub y crea un Blueprint usando `render.yaml`. Tu ID Admin (`7883560984`) ya está configurado; Render pedirá `TELEGRAM_BOT_TOKEN` y `ADMIN_BOT_TOKEN`. El disco conserva usuarios, saldo, órdenes e inventario entre reinicios. El servicio con disco funciona en una sola instancia, que es lo correcto para SQLite y el long polling de Telegram.
 
 ## Seguridad
 
