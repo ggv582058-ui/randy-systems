@@ -17,6 +17,7 @@ def _admin_ids(value: str) -> frozenset[int]:
 @dataclass(frozen=True)
 class Settings:
     bot_token: str
+    admin_bot_token: str
     admin_ids: frozenset[int]
     database_path: Path
     store_name: str
@@ -25,9 +26,12 @@ class Settings:
 
 def load_settings() -> Settings:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    admin_token = os.getenv("ADMIN_BOT_TOKEN", "").strip()
     admins = _admin_ids(os.getenv("ADMIN_IDS", ""))
     if not token:
         raise RuntimeError("Falta TELEGRAM_BOT_TOKEN")
+    if not admin_token:
+        raise RuntimeError("Falta ADMIN_BOT_TOKEN")
     if not admins:
         raise RuntimeError("Falta ADMIN_IDS (IDs separados por comas)")
 
@@ -35,6 +39,7 @@ def load_settings() -> Settings:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return Settings(
         bot_token=token,
+        admin_bot_token=admin_token,
         admin_ids=admins,
         database_path=db_path,
         store_name=os.getenv("STORE_NAME", "RANDY RESELLER SYSTEMS").strip(),
