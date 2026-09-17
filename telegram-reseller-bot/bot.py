@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import logging
+import os
 import signal
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
@@ -501,10 +503,12 @@ def build_application(token: str, panel_name: str) -> Application:
 
 async def run_bots() -> None:
     db.initialize()
-    start_health_server()
+    server = start_health_server(asyncio.get_running_loop())
     reseller_app = build_application(settings.bot_token, "reseller")
     admin_app = build_application(settings.admin_bot_token, "admin")
     apps = (reseller_app, admin_app)
+    initialized = []
+    started = []
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signame in (signal.SIGINT, signal.SIGTERM):
@@ -515,23 +519,61 @@ async def run_bots() -> None:
 
     try:
         for app in apps:
-            await app.initialize()
+            for attempt in range(1, 6):
+                try:
+                    await app.initialize()
+                    initialized.append(app)
+                    break
+                except Exception:
+                    if attempt == 5:
+                        raise
+                    log.warning("Telegram no respondió al inicializar; reintento %s/5", attempt, exc_info=True)
+                    await asyncio.sleep(attempt * 2)
         reseller_app.bot_data["admin_bot"] = admin_app.bot
         reseller_app.bot_data["reseller_bot"] = reseller_app.bot
         admin_app.bot_data["admin_bot"] = admin_app.bot
         admin_app.bot_data["reseller_bot"] = reseller_app.bot
         for app in apps:
             await app.start()
-            await app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
-        log.info("Bots iniciados: revendedores + admin (%s)", settings.store_name)
+            started.append(app)
+
+        paths = {
+            "/telegram/reseller": reseller_app,
+            "/telegram/admin": admin_app,
+        }
+        secrets = {
+            "/telegram/reseller": hashlib.sha256(settings.bot_token.encode()).hexdigest(),
+            "/telegram/admin": hashlib.sha256(settings.admin_bot_token.encode()).hexdigest(),
+        }
+        server.configure(paths, secrets)
+        base_url = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+        if not base_url.startswith("https://"):
+            raise RuntimeError("Falta RENDER_EXTERNAL_URL o WEBHOOK_BASE_URL con HTTPS")
+        for path, app in paths.items():
+            for attempt in range(1, 6):
+                try:
+                    await app.bot.set_webhook(
+                        url=f"{base_url}{path}",
+                        secret_token=secrets[path],
+                        allowed_updates=Update.ALL_TYPES,
+                        drop_pending_updates=False,
+                    )
+                    break
+                except Exception:
+                    if attempt == 5:
+                        raise
+                    log.warning("No se pudo registrar webhook; reintento %s/5", attempt, exc_info=True)
+                    await asyncio.sleep(attempt * 2)
+        log.info("Bots iniciados por webhook: revendedores + admin (%s)", settings.store_name)
         await stop_event.wait()
     finally:
-        for app in reversed(apps):
-            if app.updater and app.updater.running:
-                await app.updater.stop()
+        for app in reversed(started):
             if app.running:
                 await app.stop()
+        for app in reversed(initialized):
             await app.shutdown()
+        await asyncio.to_thread(server.shutdown)
+        server.server_close()
 
 
 def main() -> None:
