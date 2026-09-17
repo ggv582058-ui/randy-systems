@@ -14,6 +14,7 @@ Dos bots de Telegram conectados al mismo inventario: uno privado para el Admin y
 - Compra y aprobación transaccionales para evitar cobrar o entregar dos veces.
 - Archivo `render.yaml` y disco persistente para funcionamiento 24/7.
 - Endpoint `/health` para que Render supervise el servicio.
+- Webhooks HTTPS separados para evitar conflictos durante los despliegues de Render.
 
 > Usa el bot únicamente para productos digitales que tengas autorización de vender. Nunca cargues claves obtenidas sin permiso.
 
