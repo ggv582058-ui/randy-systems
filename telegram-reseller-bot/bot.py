@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
+import signal
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
@@ -59,13 +61,28 @@ def is_admin(user_id: int) -> bool:
     return bool(row and row["role"] == "admin" and user_id in settings.admin_ids)
 
 
+def panel(context: ContextTypes.DEFAULT_TYPE) -> str:
+    return context.application.bot_data.get("panel", "reseller")
+
+
+def reseller_bot(context: ContextTypes.DEFAULT_TYPE):
+    return context.application.bot_data.get("reseller_bot", context.bot)
+
+
+def admin_bot(context: ContextTypes.DEFAULT_TYPE):
+    return context.application.bot_data.get("admin_bot", context.bot)
+
+
 async def send_home(update: Update, context: ContextTypes.DEFAULT_TYPE, note: str | None = None) -> None:
     user = current_user(update)
     chat = update.effective_chat
-    if user["role"] == "admin":
+    if panel(context) == "admin":
+        if update.effective_user.id not in settings.admin_ids:
+            await chat.send_message("⛔ Este bot es privado y exclusivo para el administrador.")
+            return
         text = note or f"🛡️ <b>{html.escape(settings.store_name)}</b>\nPanel de administrador"
         await chat.send_message(text, reply_markup=ADMIN_MENU, parse_mode=ParseMode.HTML)
-    elif user["role"] == "reseller":
+    elif user["role"] in ("reseller", "admin"):
         text = note or f"💎 <b>{html.escape(settings.store_name)}</b>\nSaldo: <b>{money(user['balance_cents'])}</b>"
         await chat.send_message(text, reply_markup=USER_MENU, parse_mode=ParseMode.HTML)
     else:
@@ -90,7 +107,7 @@ async def notify_access_request(context: ContextTypes.DEFAULT_TYPE, user) -> Non
     ]])
     for admin_id in settings.admin_ids:
         try:
-            await context.bot.send_message(admin_id, text, reply_markup=keys, parse_mode=ParseMode.HTML)
+            await admin_bot(context).send_message(admin_id, text, reply_markup=keys, parse_mode=ParseMode.HTML)
         except Exception as exc:
             log.warning("No se notificó al admin %s: %s", admin_id, exc)
 
@@ -215,7 +232,14 @@ async def begin_add_keys(update: Update) -> None:
 async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = current_user(update)
     text = (update.effective_message.text or "").strip()
+    admin_panel = panel(context) == "admin"
+    if admin_panel and update.effective_user.id not in settings.admin_ids:
+        await update.effective_message.reply_text("⛔ Este bot es privado y exclusivo para el administrador.")
+        return
     if text == "📨 Solicitar acceso":
+        if admin_panel:
+            await send_home(update, context)
+            return
         await access_request(update, context)
         return
     if user["role"] not in ("reseller", "admin"):
@@ -225,28 +249,28 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if await handle_flow(update, context):
         return
 
-    if text == "🛒 Comprar keys":
+    if not admin_panel and text == "🛒 Comprar keys":
         await show_buy(update)
-    elif text == "💳 Recargar saldo":
+    elif not admin_panel and text == "💳 Recargar saldo":
         await begin_topup(update, context)
-    elif text == "👤 Mi cuenta":
+    elif not admin_panel and text == "👤 Mi cuenta":
         await show_account(update)
-    elif text == "🧾 Historial":
+    elif not admin_panel and text == "🧾 Historial":
         await show_history(update)
-    elif text == "🆘 Soporte":
+    elif not admin_panel and text == "🆘 Soporte":
         await update.effective_message.reply_text(f"🆘 Soporte: {settings.support_username}")
-    elif user["role"] == "admin" and text == "📦 Productos":
+    elif admin_panel and user["role"] == "admin" and text == "📦 Productos":
         await show_products_admin(update)
-    elif user["role"] == "admin" and text == "🔑 Añadir keys":
+    elif admin_panel and user["role"] == "admin" and text == "🔑 Añadir keys":
         await begin_add_keys(update)
-    elif user["role"] == "admin" and text == "👥 Revendedores":
+    elif admin_panel and user["role"] == "admin" and text == "👥 Revendedores":
         await show_resellers(update)
-    elif user["role"] == "admin" and text == "💳 Recargas":
+    elif admin_panel and user["role"] == "admin" and text == "💳 Recargas":
         await show_topups(update)
-    elif user["role"] == "admin" and text == "📊 Estadísticas":
+    elif admin_panel and user["role"] == "admin" and text == "📊 Estadísticas":
         await show_stats(update)
-    elif user["role"] == "admin" and text == "👤 Vista revendedor":
-        await update.effective_message.reply_text("Vista del revendedor:", reply_markup=USER_MENU)
+    elif admin_panel and user["role"] == "admin" and text == "👤 Vista revendedor":
+        await update.effective_message.reply_text("La vista del revendedor está en el bot de ventas.")
     else:
         await send_home(update, context)
 
@@ -290,11 +314,11 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         for admin_id in settings.admin_ids:
             try:
                 if proof_type == "photo":
-                    await context.bot.send_photo(admin_id, proof, caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
+                    await admin_bot(context).send_photo(admin_id, proof, caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
                 elif proof_type == "document":
-                    await context.bot.send_document(admin_id, proof, caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
+                    await admin_bot(context).send_document(admin_id, proof, caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
                 else:
-                    await context.bot.send_message(admin_id, caption + f"\nReferencia: <code>{html.escape(proof)}</code>", reply_markup=keys, parse_mode=ParseMode.HTML)
+                    await admin_bot(context).send_message(admin_id, caption + f"\nReferencia: <code>{html.escape(proof)}</code>", reply_markup=keys, parse_mode=ParseMode.HTML)
             except Exception as exc:
                 log.warning("No se notificó recarga al admin %s: %s", admin_id, exc)
         return True
@@ -339,11 +363,12 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer()
     user = current_user(update)
     data = query.data or ""
+    admin_panel = panel(context) == "admin"
     if data == "noop":
         return
 
     if data.startswith("user:"):
-        if not is_admin(query.from_user.id):
+        if not admin_panel or not is_admin(query.from_user.id):
             await query.answer("Solo Admin", show_alert=True)
             return
         _, action, raw_id = data.split(":")
@@ -354,20 +379,20 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.edit_message_reply_markup(reply_markup=None)
             await query.message.reply_text(f"✅ Usuario {target}: {label}.")
             try:
-                await context.bot.send_message(target, "✅ Tu cuenta fue aprobada como revendedor." if role == "reseller" else "❌ Tu acceso de revendedor no fue aprobado.", reply_markup=USER_MENU if role == "reseller" else PENDING_MENU)
+                await reseller_bot(context).send_message(target, "✅ Tu cuenta fue aprobada como revendedor." if role == "reseller" else "❌ Tu acceso de revendedor no fue aprobado.", reply_markup=USER_MENU if role == "reseller" else PENDING_MENU)
             except Exception:
                 pass
         return
 
     if data == "product:new":
-        if not is_admin(query.from_user.id):
+        if not admin_panel or not is_admin(query.from_user.id):
             return
         context.user_data["flow"] = {"name": "product_name"}
         await query.message.reply_text("📦 Ingresa el nombre del producto:")
         return
 
     if data.startswith("product:toggle:"):
-        if not is_admin(query.from_user.id):
+        if not admin_panel or not is_admin(query.from_user.id):
             return
         product_id = int(data.rsplit(":", 1)[1])
         product = db.product(product_id)
@@ -377,7 +402,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if data.startswith("addkeys:"):
-        if not is_admin(query.from_user.id):
+        if not admin_panel or not is_admin(query.from_user.id):
             return
         product_id = int(data.split(":")[1])
         context.user_data["flow"] = {"name": "add_keys", "product_id": product_id}
@@ -385,6 +410,9 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if data.startswith("buy:"):
+        if admin_panel:
+            await query.answer("Usa el bot de revendedores", show_alert=True)
+            return
         if user["role"] not in ("reseller", "admin"):
             return
         product_id = int(data.split(":")[1])
@@ -403,6 +431,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if data.startswith("confirm:"):
+        if admin_panel:
+            return
         product_id = int(data.split(":")[1])
         try:
             sale = db.purchase(query.from_user.id, product_id)
@@ -425,7 +455,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if data.startswith("topup:"):
-        if not is_admin(query.from_user.id):
+        if not admin_panel or not is_admin(query.from_user.id):
             return
         _, action, raw_id = data.split(":")
         topup_id = int(raw_id)
@@ -441,7 +471,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(message)
         try:
-            await context.bot.send_message(row["user_id"], f"{message}\nCantidad: {money(row['amount_cents'])}")
+            await reseller_bot(context).send_message(row["user_id"], f"{message}\nCantidad: {money(row['amount_cents'])}")
         except Exception:
             pass
 
@@ -457,18 +487,55 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.effective_message.reply_text("⚠️ Ocurrió un error. Intenta nuevamente.")
 
 
-def main() -> None:
-    db.initialize()
-    start_health_server()
-    app: Application = ApplicationBuilder().token(settings.bot_token).build()
+def build_application(token: str, panel_name: str) -> Application:
+    app: Application = ApplicationBuilder().token(token).build()
+    app.bot_data["panel"] = panel_name
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_menu))
     app.add_error_handler(error_handler)
-    log.info("Bot iniciado: %s", settings.store_name)
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
+    return app
+
+
+async def run_bots() -> None:
+    db.initialize()
+    start_health_server()
+    reseller_app = build_application(settings.bot_token, "reseller")
+    admin_app = build_application(settings.admin_bot_token, "admin")
+    apps = (reseller_app, admin_app)
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for signame in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(signame, stop_event.set)
+        except NotImplementedError:
+            pass
+
+    try:
+        for app in apps:
+            await app.initialize()
+        reseller_app.bot_data["admin_bot"] = admin_app.bot
+        reseller_app.bot_data["reseller_bot"] = reseller_app.bot
+        admin_app.bot_data["admin_bot"] = admin_app.bot
+        admin_app.bot_data["reseller_bot"] = reseller_app.bot
+        for app in apps:
+            await app.start()
+            await app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
+        log.info("Bots iniciados: revendedores + admin (%s)", settings.store_name)
+        await stop_event.wait()
+    finally:
+        for app in reversed(apps):
+            if app.updater and app.updater.running:
+                await app.updater.stop()
+            if app.running:
+                await app.stop()
+            await app.shutdown()
+
+
+def main() -> None:
+    asyncio.run(run_bots())
 
 
 if __name__ == "__main__":
