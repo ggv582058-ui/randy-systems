@@ -16,6 +16,7 @@ Dos bots de Telegram conectados al mismo inventario: uno privado para el Admin y
 - Creación de cuentas con rol de socio o administrador y saldo inicial.
 - Anuncios masivos de texto, foto, video, animación, sticker o documento.
 - Webhook opcional para conectar compras con un API externo.
+- Integración Seller API de ZentryAuth para generar hasta 100 keys por lote, consultar, resetear HWID y bloquear/desbloquear licencias desde el bot Admin.
 - Historial contable, órdenes y estadísticas.
 - Compra y aprobación transaccionales para evitar cobrar o entregar dos veces.
 - Archivo `render.yaml` y disco persistente para funcionamiento 24/7.
@@ -39,6 +40,9 @@ SUPPORT_USERNAME=@Randy_zt
 DATABASE_PATH=data/reseller.db
 KEY_API_URL=https://tu-api.example.com/eventos
 KEY_API_TOKEN=token_opcional_del_api
+ZENTRY_SELLER_KEY=credencial_seller_privada
+ZENTRY_SELLER_SECRET=secreto_seller_privado
+ZENTRY_KEY_PREFIX=RANDY
 ```
 
 4. Instala y ejecuta:
@@ -54,6 +58,8 @@ python bot.py
 ## Uso
 
 - El Admin abre `/start` en su bot privado y administra desde los botones.
+- En **API Zentry**, el Admin elige producto y cantidad; las licencias toman la duración del producto y pasan al inventario automáticamente.
+- En **Control keys**, el Admin puede consultar, resetear HWID, bloquear o desbloquear una licencia.
 - Un usuario nuevo pulsa **Solicitar acceso**.
 - El Admin recibe **Aprobar / Rechazar**.
 - El revendedor solicita una recarga y manda comprobante.

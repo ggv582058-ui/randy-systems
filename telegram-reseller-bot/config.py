@@ -24,6 +24,10 @@ class Settings:
     support_username: str
     key_api_url: str
     key_api_token: str
+    zentry_base_url: str
+    zentry_seller_key: str
+    zentry_seller_secret: str
+    zentry_key_prefix: str
 
 
 def load_settings() -> Settings:
@@ -48,4 +52,8 @@ def load_settings() -> Settings:
         support_username=os.getenv("SUPPORT_USERNAME", "@Randy_zt").strip(),
         key_api_url=os.getenv("KEY_API_URL", "").strip(),
         key_api_token=os.getenv("KEY_API_TOKEN", "").strip(),
+        zentry_base_url=os.getenv("ZENTRY_BASE_URL", "https://api.zentryauth.com").strip().rstrip("/"),
+        zentry_seller_key=os.getenv("ZENTRY_SELLER_KEY", "").strip(),
+        zentry_seller_secret=os.getenv("ZENTRY_SELLER_SECRET", "").strip(),
+        zentry_key_prefix=os.getenv("ZENTRY_KEY_PREFIX", "RANDY").strip() or "RANDY",
     )

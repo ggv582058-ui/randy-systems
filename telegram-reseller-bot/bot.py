@@ -20,6 +20,7 @@ from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, 
 from config import load_settings
 from database import Database, InsufficientBalance, NotApproved, NotFound, OutOfStock, ProductRestricted, StoreError
 from health import start_health_server
+from zentry_api import ZentryClient, ZentryError
 
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
@@ -27,6 +28,11 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("randy-reseller")
 settings = load_settings()
 db = Database(settings.database_path)
+zentry = ZentryClient(
+    settings.zentry_base_url,
+    settings.zentry_seller_key,
+    settings.zentry_seller_secret,
+)
 
 
 ADMIN_MENU = ReplyKeyboardMarkup(
@@ -34,6 +40,7 @@ ADMIN_MENU = ReplyKeyboardMarkup(
      [KeyboardButton("📎 Archivos"), KeyboardButton("🎨 Multimedia")],
      [KeyboardButton("➕ Crear socio"), KeyboardButton("👥 Revendedores")],
      [KeyboardButton("💳 Recargas"), KeyboardButton("📢 Anuncios")],
+     [KeyboardButton("⚡ API Zentry"), KeyboardButton("🛡️ Control keys")],
      [KeyboardButton("📊 Estadísticas")]],
     resize_keyboard=True,
 )
@@ -372,6 +379,30 @@ async def begin_product_media(update: Update) -> None:
     )
 
 
+async def begin_zentry_generate(update: Update) -> None:
+    if not zentry.configured:
+        await update.effective_message.reply_text(
+            "⚠️ <b>ZentryAuth todavía no está conectado.</b>\n"
+            "Guarda <code>ZENTRY_SELLER_KEY</code> y <code>ZENTRY_SELLER_SECRET</code> en Render. "
+            "Nunca los envíes por Telegram ni por este chat.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await update.effective_message.reply_text(
+        "⚡ <b>Generar keys en ZentryAuth</b>\nSelecciona el producto; se usará su duración configurada:",
+        reply_markup=product_buttons("zentrygen", active_only=False),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def begin_zentry_control(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not zentry.configured:
+        await begin_zentry_generate(update)
+        return
+    context.user_data["flow"] = {"name": "zentry_control_key"}
+    await update.effective_message.reply_text("🛡️ Envía la key que deseas consultar o administrar:")
+
+
 async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = current_user(update)
     text = (update.effective_message.text or "").strip()
@@ -415,6 +446,10 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await begin_product_file(update)
     elif admin_panel and user["role"] == "admin" and text == "🎨 Multimedia":
         await begin_product_media(update)
+    elif admin_panel and user["role"] == "admin" and text == "⚡ API Zentry":
+        await begin_zentry_generate(update)
+    elif admin_panel and user["role"] == "admin" and text == "🛡️ Control keys":
+        await begin_zentry_control(update, context)
     elif admin_panel and user["role"] == "admin" and text == "➕ Crear socio":
         context.user_data["flow"] = {"name": "partner_create_login"}
         await update.effective_message.reply_text("👤 Escribe el usuario para el socio:")
@@ -443,6 +478,54 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if flow["name"] == "partner_login":
         flow["name"], flow["login"] = "partner_password", text
         await message.reply_text("🔑 Escribe tu contraseña:")
+        return True
+
+    if flow["name"] == "zentry_generate_quantity":
+        try:
+            quantity = int(text)
+            if quantity < 1 or quantity > 100:
+                raise ValueError
+        except ValueError:
+            await message.reply_text("❌ Escribe una cantidad entre 1 y 100.")
+            return True
+        product = db.product(flow["product_id"])
+        if not product:
+            context.user_data.pop("flow", None)
+            await message.reply_text("❌ Producto no encontrado.", reply_markup=ADMIN_MENU)
+            return True
+        context.user_data.pop("flow", None)
+        keys = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                f"✅ Generar {quantity} keys", callback_data=f"zentryconfirm:{product['id']}:{quantity}"
+            ),
+            InlineKeyboardButton("❌ Cancelar", callback_data="cancel"),
+        ]])
+        await message.reply_text(
+            "⚡ <b>Confirmar generación</b>\n"
+            f"Producto: <b>{html.escape(product['name'])}</b>\n"
+            f"Cantidad: <b>{quantity}</b>\nDuración: <b>{product['duration_days']} días</b>",
+            reply_markup=keys,
+            parse_mode=ParseMode.HTML,
+        )
+        return True
+
+    if flow["name"] == "zentry_control_key":
+        if len(text) < 4 or len(text) > 200:
+            await message.reply_text("❌ La key no parece válida. Inténtalo otra vez.")
+            return True
+        context.user_data.pop("flow", None)
+        context.user_data["zentry_control_key"] = text
+        actions = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔎 Consultar", callback_data="zentryctl:info")],
+            [InlineKeyboardButton("♻️ Reset HWID", callback_data="zentryctl:reset")],
+            [InlineKeyboardButton("🚫 Bloquear", callback_data="zentryctl:ban"),
+             InlineKeyboardButton("✅ Desbloquear", callback_data="zentryctl:unban")],
+        ])
+        await message.reply_text(
+            f"🛡️ <b>Control de licencia</b>\nKey: <code>{html.escape(text)}</code>",
+            reply_markup=actions,
+            parse_mode=ParseMode.HTML,
+        )
         return True
     if flow["name"] == "partner_password":
         ok = db.activate_partner(flow["login"], text, message.from_user.id)
@@ -926,6 +1009,101 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         product_id = int(data.split(":")[1])
         context.user_data["flow"] = {"name": "add_keys", "product_id": product_id}
         await query.message.reply_text("🔑 Envía las keys, <b>una por línea</b>.", parse_mode=ParseMode.HTML)
+        return
+
+    if data.startswith("zentrygen:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        product_id = int(data.split(":", 1)[1])
+        product = db.product(product_id)
+        if not product:
+            await query.answer("Producto no encontrado", show_alert=True)
+            return
+        await query.answer()
+        context.user_data["flow"] = {"name": "zentry_generate_quantity", "product_id": product_id}
+        await query.message.reply_text(
+            f"⚡ ¿Cuántas keys de <b>{html.escape(product['name'])}</b> quieres generar?\n"
+            "Escribe una cantidad entre <b>1 y 100</b>.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if data.startswith("zentryconfirm:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        _, raw_product, raw_quantity = data.split(":")
+        product = db.product(int(raw_product))
+        quantity = int(raw_quantity)
+        if not product or quantity < 1 or quantity > 100:
+            await query.answer("Solicitud inválida", show_alert=True)
+            return
+        await query.answer("Generando keys…")
+        await query.edit_message_reply_markup(reply_markup=None)
+        status_message = await query.message.reply_text(
+            f"⏳ Generando {quantity} keys de {product['duration_days']} días en ZentryAuth…"
+        )
+        generated: list[str] = []
+        failure = ""
+        for _ in range(quantity):
+            try:
+                key = await asyncio.to_thread(
+                    zentry.create_license, int(product["duration_days"]), settings.zentry_key_prefix
+                )
+                generated.append(key)
+            except ZentryError as exc:
+                failure = str(exc)
+                break
+        added = duplicates = 0
+        if generated:
+            added, duplicates = db.add_keys(int(product["id"]), generated)
+        result = (
+            "⚡ <b>Generación terminada</b>\n"
+            f"✅ Creadas en ZentryAuth: <b>{len(generated)}</b>\n"
+            f"📦 Guardadas en el inventario: <b>{added}</b>\n"
+            f"♻️ Duplicadas omitidas: <b>{duplicates}</b>"
+        )
+        if failure:
+            result += f"\n⚠️ Se detuvo por: {html.escape(failure)}"
+        await status_message.edit_text(result, parse_mode=ParseMode.HTML)
+        return
+
+    if data.startswith("zentryctl:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        license_key = context.user_data.get("zentry_control_key")
+        if not license_key:
+            await query.answer("Vuelve a enviar la key", show_alert=True)
+            return
+        action = data.split(":", 1)[1]
+        operations = {
+            "info": ("Consultar", zentry.license_info),
+            "reset": ("Reset HWID", zentry.reset_hwid),
+            "ban": ("Bloquear", zentry.ban_license),
+            "unban": ("Desbloquear", zentry.unban_license),
+        }
+        if action not in operations:
+            await query.answer("Acción inválida", show_alert=True)
+            return
+        label, operation = operations[action]
+        await query.answer(f"{label}…")
+        try:
+            result = await asyncio.to_thread(operation, license_key)
+        except ZentryError as exc:
+            await query.message.reply_text(f"❌ {html.escape(str(exc))}", parse_mode=ParseMode.HTML)
+            return
+        if action == "info":
+            data_result = result.get("data", result)
+            pretty = json.dumps(data_result, ensure_ascii=False, indent=2, default=str)[:3500]
+            await query.message.reply_text(
+                f"🔎 <b>Estado de la licencia</b>\n<pre>{html.escape(pretty)}</pre>",
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            message = result.get("message") or f"{label} completado"
+            await query.message.reply_text(f"✅ {html.escape(str(message))}", parse_mode=ParseMode.HTML)
         return
 
     if data.startswith("addfile:"):

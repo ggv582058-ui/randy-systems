@@ -17,6 +17,12 @@ services:
         sync: false
       - key: ADMIN_BOT_TOKEN
         sync: false
+      - key: ZENTRY_SELLER_KEY
+        sync: false
+      - key: ZENTRY_SELLER_SECRET
+        sync: false
+      - key: ZENTRY_KEY_PREFIX
+        value: RANDY
       - key: ADMIN_IDS
         value: "7883560984"
       - key: STORE_NAME
