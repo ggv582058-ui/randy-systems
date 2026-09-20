@@ -20,8 +20,11 @@ class ZentryClient:
         opener: Callable[..., Any] = urllib.request.urlopen,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.seller_key = seller_key
-        self.seller_secret = seller_secret
+        # Mobile copy/paste can insert newlines into long credentials. Seller
+        # credentials never contain whitespace, so normalize them before they
+        # become HTTP headers.
+        self.seller_key = "".join(seller_key.split())
+        self.seller_secret = "".join(seller_secret.split())
         self.timeout = timeout
         self._opener = opener
 
@@ -55,6 +58,10 @@ class ZentryClient:
             raise ZentryError("No se pudo conectar con ZentryAuth") from None
         except TimeoutError:
             raise ZentryError("ZentryAuth tardó demasiado en responder") from None
+        except (ValueError, UnicodeError):
+            # Never propagate urllib's raw invalid-header error because it can
+            # include the credential value in the traceback.
+            raise ZentryError("Las credenciales Seller contienen caracteres inválidos") from None
 
         try:
             result = json.loads(raw)

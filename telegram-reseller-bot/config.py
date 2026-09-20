@@ -14,6 +14,11 @@ def _admin_ids(value: str) -> frozenset[int]:
     return frozenset(ids)
 
 
+def _compact_secret(value: str) -> str:
+    """Remove accidental line wrapping when secrets are pasted from mobile."""
+    return "".join(value.split())
+
+
 @dataclass(frozen=True)
 class Settings:
     bot_token: str
@@ -53,7 +58,7 @@ def load_settings() -> Settings:
         key_api_url=os.getenv("KEY_API_URL", "").strip(),
         key_api_token=os.getenv("KEY_API_TOKEN", "").strip(),
         zentry_base_url=os.getenv("ZENTRY_BASE_URL", "https://api.zentryauth.com").strip().rstrip("/"),
-        zentry_seller_key=os.getenv("ZENTRY_SELLER_KEY", "").strip(),
-        zentry_seller_secret=os.getenv("ZENTRY_SELLER_SECRET", "").strip(),
+        zentry_seller_key=_compact_secret(os.getenv("ZENTRY_SELLER_KEY", "")),
+        zentry_seller_secret=_compact_secret(os.getenv("ZENTRY_SELLER_SECRET", "")),
         zentry_key_prefix=os.getenv("ZENTRY_KEY_PREFIX", "RANDY").strip() or "RANDY",
     )

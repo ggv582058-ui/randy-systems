@@ -52,6 +52,23 @@ class ZentryClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ZentryError, "INVALID_SELLER_KEY"):
             client.reset_hwid("KEY")
 
+    def test_pasted_credentials_are_compacted_before_headers(self):
+        captured = {}
+
+        def opener(request, timeout):
+            captured["headers"] = dict(request.header_items())
+            return FakeResponse({"success": True, "data": {"license_key": "RANDY-OK"}})
+
+        client = ZentryClient(
+            "https://api.zentryauth.com",
+            "  seller-key\n",
+            "seller-secret\nwrapped  ",
+            opener=opener,
+        )
+        self.assertEqual(client.create_license(31), "RANDY-OK")
+        self.assertEqual(captured["headers"]["X-seller-key"], "seller-key")
+        self.assertEqual(captured["headers"]["X-seller-secret"], "seller-secretwrapped")
+
 
 if __name__ == "__main__":
     unittest.main()
