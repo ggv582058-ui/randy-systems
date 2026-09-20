@@ -47,6 +47,12 @@ def load_settings() -> Settings:
         raise RuntimeError("Falta ADMIN_IDS (IDs separados por comas)")
 
     db_path = Path(os.getenv("DATABASE_PATH", "data/reseller.db"))
+    # Render starts the app from telegram-reseller-bot/, while the persistent
+    # disk is mounted at /opt/render/project/src/data.  Resolve relative DB
+    # paths from the project root so deployments never fall back to ephemeral
+    # storage inside the source directory.
+    if os.getenv("RENDER") and not db_path.is_absolute():
+        db_path = Path("/opt/render/project/src") / db_path
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return Settings(
         bot_token=token,
