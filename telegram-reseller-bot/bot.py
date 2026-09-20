@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
+import io
 import logging
 import os
 import signal
@@ -129,18 +130,24 @@ async def access_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.effective_message.reply_text("⏳ Tu solicitud ya está pendiente.", reply_markup=PENDING_MENU)
 
 
-def product_buttons(prefix: str, active_only: bool = True) -> InlineKeyboardMarkup:
+def product_buttons(prefix: str, active_only: bool = True, user_id: int | None = None) -> InlineKeyboardMarkup:
     rows = []
-    for p in db.products(active_only=active_only):
+    products = db.products_for_user(user_id, active_only=active_only) if user_id else db.products(active_only=active_only)
+    for p in products:
+        price = p["effective_price_cents"] if user_id else p["price_cents"]
         rows.append([InlineKeyboardButton(
-            f"{p['name']} · {money(p['price_cents'])} · Stock {p['stock']}",
+            f"{p['name']} · {money(price)} · Stock {p['stock']}",
             callback_data=f"{prefix}:{p['id']}",
         )])
     return InlineKeyboardMarkup(rows or [[InlineKeyboardButton("Sin productos", callback_data="noop")]])
 
 
 async def show_buy(update: Update) -> None:
-    await update.effective_message.reply_text("🛒 <b>Selecciona un producto</b>", reply_markup=product_buttons("buy"), parse_mode=ParseMode.HTML)
+    await update.effective_message.reply_text(
+        "🛒 <b>Selecciona un producto</b>",
+        reply_markup=product_buttons("buy", user_id=update.effective_user.id),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 async def show_products_admin(update: Update) -> None:
@@ -170,9 +177,32 @@ async def show_resellers(update: Update) -> None:
     for u in approved:
         tag = f"@{u['username']}" if u["username"] else u["full_name"]
         lines.append(f"• {html.escape(tag)} · {money(u['balance_cents'])}")
-        rows.append([InlineKeyboardButton(f"🚫 Revocar {tag}", callback_data=f"user:revoke:{u['telegram_id']}")])
+        rows.append([InlineKeyboardButton(f"⚙️ Administrar {tag}", callback_data=f"partner:manage:{u['telegram_id']}")])
     await update.effective_message.reply_text(
         "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows) if rows else None, parse_mode=ParseMode.HTML
+    )
+
+
+async def show_partner_manager(message, target: int) -> None:
+    partner = db.reseller(target)
+    if not partner:
+        await message.reply_text("❌ Socio no encontrado.")
+        return
+    tag = f"@{partner['username']}" if partner["username"] else partner["full_name"]
+    login = partner["login"] or "Cuenta aprobada manualmente"
+    keys = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Agregar saldo", callback_data=f"partner:add:{target}"),
+         InlineKeyboardButton("➖ Quitar saldo", callback_data=f"partner:subtract:{target}")],
+        [InlineKeyboardButton("💲 Precio especial", callback_data=f"partner:prices:{target}")],
+        [InlineKeyboardButton("⚠️ Enviar advertencia", callback_data=f"partner:warn:{target}")],
+        [InlineKeyboardButton("🚫 Revocar acceso", callback_data=f"user:revoke:{target}")],
+    ])
+    await message.reply_text(
+        f"⚙️ <b>Administrar socio</b>\nNombre: {html.escape(tag)}\n"
+        f"Usuario de acceso: <code>{html.escape(login)}</code>\nID: <code>{target}</code>\n"
+        f"Saldo: <b>{money(partner['balance_cents'])}</b>",
+        reply_markup=keys,
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -189,9 +219,17 @@ async def show_topups(update: Update) -> None:
             InlineKeyboardButton("❌ Rechazar", callback_data=f"topup:reject:{item['id']}"),
         ]])
         if item["proof_type"] == "photo":
-            await update.effective_chat.send_photo(item["proof_value"], caption=text, reply_markup=keys, parse_mode=ParseMode.HTML)
+            if item["proof_blob"]:
+                await update.effective_chat.send_photo(io.BytesIO(item["proof_blob"]), caption=text, reply_markup=keys, parse_mode=ParseMode.HTML)
+            else:
+                await update.effective_chat.send_message(text + "\n⚠️ Comprobante antiguo no disponible.", reply_markup=keys, parse_mode=ParseMode.HTML)
         elif item["proof_type"] == "document":
-            await update.effective_chat.send_document(item["proof_value"], caption=text, reply_markup=keys, parse_mode=ParseMode.HTML)
+            if item["proof_blob"]:
+                stream = io.BytesIO(item["proof_blob"])
+                stream.name = item["proof_name"] or "comprobante"
+                await update.effective_chat.send_document(stream, caption=text, reply_markup=keys, parse_mode=ParseMode.HTML)
+            else:
+                await update.effective_chat.send_message(text + "\n⚠️ Comprobante antiguo no disponible.", reply_markup=keys, parse_mode=ParseMode.HTML)
         else:
             await update.effective_chat.send_message(text + f"\nReferencia: <code>{html.escape(item['proof_value'])}</code>", reply_markup=keys, parse_mode=ParseMode.HTML)
 
@@ -332,9 +370,32 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return True
     if flow["name"] == "broadcast":
         sent = failed = 0
+        payload = None
+        kind = "text"
+        caption = message.caption or ""
+        filename = None
+        if message.photo:
+            kind = "photo"
+            tg_file = await context.bot.get_file(message.photo[-1].file_id)
+            payload = bytes(await tg_file.download_as_bytearray())
+        elif message.document:
+            kind = "document"
+            filename = message.document.file_name or "anuncio"
+            tg_file = await context.bot.get_file(message.document.file_id)
+            payload = bytes(await tg_file.download_as_bytearray())
+        elif not text:
+            await message.reply_text("❌ Envía texto, una foto o un documento.")
+            return True
         for target in db.reseller_ids():
             try:
-                await reseller_bot(context).copy_message(target, message.chat_id, message.message_id)
+                if kind == "photo":
+                    await reseller_bot(context).send_photo(target, io.BytesIO(payload), caption=caption)
+                elif kind == "document":
+                    stream = io.BytesIO(payload)
+                    stream.name = filename
+                    await reseller_bot(context).send_document(target, stream, caption=caption)
+                else:
+                    await reseller_bot(context).send_message(target, text)
                 sent += 1
             except Exception:
                 failed += 1
@@ -345,9 +406,73 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         if not message.document:
             await message.reply_text("❌ Envía el archivo como documento.")
             return True
-        db.set_product_file(flow["product_id"], message.document.file_id, message.document.file_name or "producto")
+        if message.document.file_size and message.document.file_size > 20 * 1024 * 1024:
+            await message.reply_text("❌ El archivo no puede superar 20 MB.")
+            return True
+        tg_file = await context.bot.get_file(message.document.file_id)
+        file_data = bytes(await tg_file.download_as_bytearray())
+        db.set_product_file(
+            flow["product_id"], message.document.file_id,
+            message.document.file_name or "producto", file_data,
+        )
         context.user_data.pop("flow", None)
         await message.reply_text("✅ Archivo vinculado al producto.", reply_markup=ADMIN_MENU)
+        return True
+
+    if flow["name"] in ("partner_balance_add", "partner_balance_subtract"):
+        try:
+            amount = parse_amount(text)
+            if flow["name"] == "partner_balance_subtract":
+                amount = -amount
+            balance = db.adjust_balance(flow["target"], amount, message.from_user.id)
+        except (ValueError, InsufficientBalance, NotFound) as exc:
+            await message.reply_text(f"❌ {exc}")
+            return True
+        target = flow["target"]
+        context.user_data.pop("flow", None)
+        action = "agregó" if amount > 0 else "retiró"
+        await message.reply_text(
+            f"✅ Se {action} {money(abs(amount))}. Nuevo saldo: {money(balance)}", reply_markup=ADMIN_MENU
+        )
+        try:
+            await reseller_bot(context).send_message(
+                target, f"💰 El administrador actualizó tu saldo.\nMovimiento: {'+' if amount > 0 else '-'}{money(abs(amount))}\nSaldo actual: {money(balance)}"
+            )
+        except Exception:
+            pass
+        return True
+
+    if flow["name"] == "partner_warning":
+        if not text:
+            await message.reply_text("❌ Escribe el mensaje de advertencia.")
+            return True
+        target = flow["target"]
+        try:
+            await reseller_bot(context).send_message(target, f"⚠️ ADVERTENCIA DEL ADMIN\n\n{text}")
+        except Exception:
+            await message.reply_text("❌ No se pudo entregar. El socio debe iniciar el bot de revendedores.")
+            return True
+        context.user_data.pop("flow", None)
+        await message.reply_text("✅ Advertencia enviada al socio.", reply_markup=ADMIN_MENU)
+        return True
+
+    if flow["name"] == "partner_price":
+        try:
+            price = parse_amount(text)
+            db.set_reseller_price(flow["target"], flow["product_id"], price)
+        except (ValueError, NotFound) as exc:
+            await message.reply_text(f"❌ {exc}")
+            return True
+        target = flow["target"]
+        product = db.product(flow["product_id"])
+        context.user_data.pop("flow", None)
+        await message.reply_text(
+            f"✅ Precio para este socio: {html.escape(product['name'])} = {money(price)}", reply_markup=ADMIN_MENU
+        )
+        try:
+            await reseller_bot(context).send_message(target, f"💲 Tienes un precio especial en {product['name']}: {money(price)}")
+        except Exception:
+            pass
         return True
 
     if flow["name"] == "topup_amount":
@@ -361,16 +486,26 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return True
 
     if flow["name"] == "topup_proof":
+        proof_blob = None
+        proof_name = None
         if message.photo:
             proof_type, proof = "photo", message.photo[-1].file_id
+            tg_file = await context.bot.get_file(proof)
+            proof_blob = bytes(await tg_file.download_as_bytearray())
+            proof_name = "comprobante.jpg"
         elif message.document:
             proof_type, proof = "document", message.document.file_id
+            tg_file = await context.bot.get_file(proof)
+            proof_blob = bytes(await tg_file.download_as_bytearray())
+            proof_name = message.document.file_name or "comprobante"
         elif text:
             proof_type, proof = "text", text[:500]
         else:
             await message.reply_text("❌ Envía una imagen, documento o referencia escrita.")
             return True
-        topup_id = db.create_topup(message.from_user.id, flow["amount_cents"], proof_type, proof)
+        topup_id = db.create_topup(
+            message.from_user.id, flow["amount_cents"], proof_type, proof, proof_blob, proof_name
+        )
         context.user_data.pop("flow", None)
         await message.reply_text(f"✅ Recarga #{topup_id} enviada. Espera la aprobación del Admin.", reply_markup=USER_MENU)
         item = db.topup(topup_id)
@@ -382,9 +517,11 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         for admin_id in settings.admin_ids:
             try:
                 if proof_type == "photo":
-                    await admin_bot(context).send_photo(admin_id, proof, caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
+                    await admin_bot(context).send_photo(admin_id, io.BytesIO(proof_blob), caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
                 elif proof_type == "document":
-                    await admin_bot(context).send_document(admin_id, proof, caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
+                    stream = io.BytesIO(proof_blob)
+                    stream.name = proof_name
+                    await admin_bot(context).send_document(admin_id, stream, caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
                 else:
                     await admin_bot(context).send_message(admin_id, caption + f"\nReferencia: <code>{html.escape(proof)}</code>", reply_markup=keys, parse_mode=ParseMode.HTML)
             except Exception as exc:
@@ -428,11 +565,62 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
 
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
     user = current_user(update)
     data = query.data or ""
     admin_panel = panel(context) == "admin"
     if data == "noop":
+        await query.answer()
+        return
+
+    if data.startswith("partner:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        parts = data.split(":")
+        action, target = parts[1], int(parts[2])
+        if action == "manage":
+            await query.answer()
+            await show_partner_manager(query.message, target)
+        elif action in ("add", "subtract"):
+            await query.answer()
+            context.user_data["flow"] = {
+                "name": "partner_balance_add" if action == "add" else "partner_balance_subtract",
+                "target": target,
+            }
+            await query.message.reply_text(
+                f"💰 Escribe cuánto quieres {'agregar' if action == 'add' else 'quitar'}. Ejemplo: <code>25.00</code>",
+                parse_mode=ParseMode.HTML,
+            )
+        elif action == "warn":
+            await query.answer()
+            context.user_data["flow"] = {"name": "partner_warning", "target": target}
+            await query.message.reply_text("⚠️ Escribe la advertencia privada para este socio:")
+        elif action == "prices":
+            await query.answer()
+            prices = db.reseller_prices(target)
+            rows = []
+            lines = ["💲 <b>Precio especial del socio</b>"]
+            for p in prices:
+                current = p["reseller_price_cents"]
+                lines.append(
+                    f"• {html.escape(p['name'])}: {money(current) if current else 'normal ' + money(p['regular_price_cents'])}"
+                )
+                rows.append([InlineKeyboardButton(p["name"], callback_data=f"partnerprice:{target}:{p['id']}")])
+            await query.message.reply_text(
+                "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows) if rows else None, parse_mode=ParseMode.HTML
+            )
+        return
+
+    if data.startswith("partnerprice:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        _, raw_target, raw_product = data.split(":")
+        await query.answer()
+        context.user_data["flow"] = {
+            "name": "partner_price", "target": int(raw_target), "product_id": int(raw_product)
+        }
+        await query.message.reply_text("💲 Escribe el precio especial para este socio. Ejemplo: <code>20.00</code>", parse_mode=ParseMode.HTML)
         return
 
     if data.startswith("user:"):
@@ -442,6 +630,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _, action, raw_id = data.split(":")
         target = int(raw_id)
         role = {"approve": "reseller", "reject": "rejected", "revoke": "rejected"}[action]
+        await query.answer()
         if db.set_role(target, role):
             label = "aprobado" if role == "reseller" else "sin acceso"
             await query.edit_message_reply_markup(reply_markup=None)
@@ -454,14 +643,18 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data == "product:new":
         if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
             return
+        await query.answer()
         context.user_data["flow"] = {"name": "product_name"}
         await query.message.reply_text("📦 Ingresa el nombre del producto:")
         return
 
     if data.startswith("product:toggle:"):
         if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
             return
+        await query.answer()
         product_id = int(data.rsplit(":", 1)[1])
         product = db.product(product_id)
         if product:
@@ -471,7 +664,9 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data.startswith("addkeys:"):
         if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
             return
+        await query.answer()
         product_id = int(data.split(":")[1])
         context.user_data["flow"] = {"name": "add_keys", "product_id": product_id}
         await query.message.reply_text("🔑 Envía las keys, <b>una por línea</b>.", parse_mode=ParseMode.HTML)
@@ -479,7 +674,9 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data.startswith("addfile:"):
         if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
             return
+        await query.answer()
         product_id = int(data.split(":")[1])
         context.user_data["flow"] = {"name": "product_file", "product_id": product_id}
         await query.message.reply_text("📎 Envía el archivo como documento.")
@@ -490,24 +687,27 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.answer("Usa el bot de revendedores", show_alert=True)
             return
         if user["role"] not in ("reseller", "admin"):
+            await query.answer("Acceso no autorizado", show_alert=True)
             return
         product_id = int(data.split(":")[1])
-        p = db.product(product_id)
+        p = db.product_for_user(product_id, query.from_user.id)
         if not p or not p["active"]:
             await query.answer("Producto no disponible", show_alert=True)
             return
+        await query.answer()
         keys = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Confirmar compra", callback_data=f"confirm:{product_id}"),
             InlineKeyboardButton("❌ Cancelar", callback_data="cancel"),
         ]])
         await query.message.reply_text(
-            f"<b>{html.escape(p['name'])}</b>\nPrecio: {money(p['price_cents'])}\nStock: {p['stock']}\n\n¿Confirmar compra?",
+            f"<b>{html.escape(p['name'])}</b>\nPrecio: {money(p['effective_price_cents'])}\nStock: {p['stock']}\n\n¿Confirmar compra?",
             reply_markup=keys, parse_mode=ParseMode.HTML,
         )
         return
 
     if data.startswith("confirm:"):
         if admin_panel:
+            await query.answer("Usa el bot de revendedores", show_alert=True)
             return
         product_id = int(data.split(":")[1])
         try:
@@ -515,6 +715,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except (InsufficientBalance, OutOfStock, NotApproved, NotFound) as exc:
             await query.answer(str(exc), show_alert=True)
             return
+        await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
             "✅ <b>Compra completada</b>\n"
@@ -524,16 +725,23 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             parse_mode=ParseMode.HTML,
         )
         if sale["file"]:
-            await query.message.reply_document(sale["file"]["file_id"], filename=sale["file"]["file_name"], caption="📎 Archivo del producto")
+            try:
+                stream = io.BytesIO(sale["file"]["file_data"])
+                stream.name = sale["file"]["file_name"]
+                await query.message.reply_document(stream, caption="📎 Archivo del producto")
+            except Exception:
+                await query.message.reply_text("⚠️ La key fue entregada, pero el archivo necesita que el Admin lo vuelva a subir.")
         return
 
     if data == "cancel":
+        await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text("Compra cancelada.")
         return
 
     if data.startswith("topup:"):
         if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
             return
         _, action, raw_id = data.split(":")
         topup_id = int(raw_id)
@@ -546,12 +754,16 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not changed or not row:
             await query.answer("Ya fue procesada", show_alert=True)
             return
+        await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(message)
         try:
             await reseller_bot(context).send_message(row["user_id"], f"{message}\nCantidad: {money(row['amount_cents'])}")
         except Exception:
             pass
+        return
+
+    await query.answer()
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

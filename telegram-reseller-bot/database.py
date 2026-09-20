@@ -147,10 +147,29 @@ class Database:
                     product_id INTEGER PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE,
                     file_id TEXT NOT NULL,
                     file_name TEXT NOT NULL,
+                    file_data BLOB,
                     uploaded_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS reseller_prices (
+                    user_id INTEGER NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+                    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                    price_cents INTEGER NOT NULL CHECK(price_cents > 0),
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(user_id, product_id)
                 );
                 """
             )
+
+            # Migraciones seguras para instalaciones creadas con versiones anteriores.
+            product_file_columns = {row["name"] for row in con.execute("PRAGMA table_info(product_files)")}
+            if "file_data" not in product_file_columns:
+                con.execute("ALTER TABLE product_files ADD COLUMN file_data BLOB")
+            topup_columns = {row["name"] for row in con.execute("PRAGMA table_info(topups)")}
+            if "proof_blob" not in topup_columns:
+                con.execute("ALTER TABLE topups ADD COLUMN proof_blob BLOB")
+            if "proof_name" not in topup_columns:
+                con.execute("ALTER TABLE topups ADD COLUMN proof_name TEXT")
 
     def create_partner(self, login: str, password: str) -> None:
         login = login.strip()
@@ -178,12 +197,13 @@ class Database:
             con.execute("UPDATE users SET role='reseller', requested_access=0, updated_at=? WHERE telegram_id=?", (utcnow(), telegram_id))
             return True
 
-    def set_product_file(self, product_id: int, file_id: str, file_name: str) -> None:
+    def set_product_file(self, product_id: int, file_id: str, file_name: str, file_data: bytes) -> None:
         with self.transaction() as con:
             con.execute(
-                """INSERT INTO product_files(product_id,file_id,file_name,uploaded_at) VALUES(?,?,?,?)
-                   ON CONFLICT(product_id) DO UPDATE SET file_id=excluded.file_id,file_name=excluded.file_name,uploaded_at=excluded.uploaded_at""",
-                (product_id, file_id, file_name, utcnow()),
+                """INSERT INTO product_files(product_id,file_id,file_name,file_data,uploaded_at) VALUES(?,?,?,?,?)
+                   ON CONFLICT(product_id) DO UPDATE SET file_id=excluded.file_id,file_name=excluded.file_name,
+                   file_data=excluded.file_data,uploaded_at=excluded.uploaded_at""",
+                (product_id, file_id, file_name, file_data, utcnow()),
             )
 
     def reseller_ids(self) -> list[int]:
@@ -243,6 +263,54 @@ class Database:
                 "SELECT * FROM users WHERE role='reseller' ORDER BY updated_at DESC LIMIT ?", (limit,)
             ).fetchall()
 
+    def reseller(self, telegram_id: int) -> sqlite3.Row | None:
+        with self.connect() as con:
+            return con.execute(
+                """SELECT u.*, p.login FROM users u
+                   LEFT JOIN partner_accounts p ON p.telegram_id=u.telegram_id
+                   WHERE u.telegram_id=? AND u.role='reseller'""",
+                (telegram_id,),
+            ).fetchone()
+
+    def adjust_balance(self, user_id: int, amount_cents: int, admin_id: int) -> int:
+        if amount_cents == 0:
+            raise ValueError("La cantidad no puede ser cero")
+        with self.transaction() as con:
+            row = con.execute("SELECT balance_cents, role FROM users WHERE telegram_id=?", (user_id,)).fetchone()
+            if not row or row["role"] != "reseller":
+                raise NotFound("Socio no encontrado")
+            balance = row["balance_cents"] + amount_cents
+            if balance < 0:
+                raise InsufficientBalance("El socio no tiene saldo suficiente")
+            now = utcnow()
+            con.execute("UPDATE users SET balance_cents=?, updated_at=? WHERE telegram_id=?", (balance, now, user_id))
+            con.execute(
+                "INSERT INTO ledger(user_id,kind,amount_cents,balance_after_cents,reference,created_at) VALUES(?,?,?,?,?,?)",
+                (user_id, "adjustment", amount_cents, balance, f"admin:{admin_id}", now),
+            )
+            return balance
+
+    def set_reseller_price(self, user_id: int, product_id: int, price_cents: int) -> None:
+        with self.transaction() as con:
+            if not con.execute("SELECT 1 FROM users WHERE telegram_id=? AND role='reseller'", (user_id,)).fetchone():
+                raise NotFound("Socio no encontrado")
+            if not con.execute("SELECT 1 FROM products WHERE id=?", (product_id,)).fetchone():
+                raise NotFound("Producto no encontrado")
+            con.execute(
+                """INSERT INTO reseller_prices(user_id,product_id,price_cents,updated_at) VALUES(?,?,?,?)
+                   ON CONFLICT(user_id,product_id) DO UPDATE SET price_cents=excluded.price_cents,updated_at=excluded.updated_at""",
+                (user_id, product_id, price_cents, utcnow()),
+            )
+
+    def reseller_prices(self, user_id: int) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            return con.execute(
+                """SELECT p.id,p.name,p.price_cents AS regular_price_cents,rp.price_cents AS reseller_price_cents
+                   FROM products p LEFT JOIN reseller_prices rp ON rp.product_id=p.id AND rp.user_id=?
+                   ORDER BY p.id DESC""",
+                (user_id,),
+            ).fetchall()
+
     def create_product(self, name: str, price_cents: int, description: str = "") -> int:
         with self.transaction() as con:
             cur = con.execute(
@@ -269,6 +337,31 @@ class Database:
                     {where} GROUP BY p.id ORDER BY p.id DESC"""
             ).fetchall()
 
+    def products_for_user(self, user_id: int, active_only: bool = True) -> list[sqlite3.Row]:
+        where = "WHERE p.active=1" if active_only else ""
+        with self.connect() as con:
+            return con.execute(
+                f"""SELECT p.*, COALESCE(rp.price_cents,p.price_cents) AS effective_price_cents,
+                    COUNT(CASE WHEN k.status='available' THEN 1 END) AS stock
+                    FROM products p
+                    LEFT JOIN reseller_prices rp ON rp.product_id=p.id AND rp.user_id=?
+                    LEFT JOIN inventory_keys k ON k.product_id=p.id
+                    {where} GROUP BY p.id ORDER BY p.id DESC""",
+                (user_id,),
+            ).fetchall()
+
+    def product_for_user(self, product_id: int, user_id: int) -> sqlite3.Row | None:
+        with self.connect() as con:
+            return con.execute(
+                """SELECT p.*, COALESCE(rp.price_cents,p.price_cents) AS effective_price_cents,
+                   COUNT(CASE WHEN k.status='available' THEN 1 END) AS stock
+                   FROM products p
+                   LEFT JOIN reseller_prices rp ON rp.product_id=p.id AND rp.user_id=?
+                   LEFT JOIN inventory_keys k ON k.product_id=p.id
+                   WHERE p.id=? GROUP BY p.id""",
+                (user_id, product_id),
+            ).fetchone()
+
     def set_product_active(self, product_id: int, active: bool) -> bool:
         with self.transaction() as con:
             cur = con.execute("UPDATE products SET active=? WHERE id=?", (int(active), product_id))
@@ -288,14 +381,16 @@ class Database:
                 added += cur.rowcount
         return added, len(clean) - added
 
-    def create_topup(self, user_id: int, amount_cents: int, proof_type: str, proof_value: str) -> int:
+    def create_topup(self, user_id: int, amount_cents: int, proof_type: str, proof_value: str,
+                     proof_blob: bytes | None = None, proof_name: str | None = None) -> int:
         with self.transaction() as con:
             row = con.execute("SELECT role FROM users WHERE telegram_id=?", (user_id,)).fetchone()
             if not row or row["role"] not in ("reseller", "admin"):
                 raise NotApproved("Usuario no aprobado")
             cur = con.execute(
-                "INSERT INTO topups(user_id, amount_cents, proof_type, proof_value, created_at) VALUES(?,?,?,?,?)",
-                (user_id, amount_cents, proof_type, proof_value, utcnow()),
+                """INSERT INTO topups(user_id,amount_cents,proof_type,proof_value,created_at,proof_blob,proof_name)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (user_id, amount_cents, proof_type, proof_value, utcnow(), proof_blob, proof_name),
             )
             return int(cur.lastrowid)
 
@@ -365,7 +460,12 @@ class Database:
             ).fetchone()
             if not key:
                 raise OutOfStock("Producto sin stock")
-            if user["balance_cents"] < product["price_cents"]:
+            price = con.execute(
+                "SELECT price_cents FROM reseller_prices WHERE user_id=? AND product_id=?",
+                (user_id, product_id),
+            ).fetchone()
+            price_cents = price["price_cents"] if price else product["price_cents"]
+            if user["balance_cents"] < price_cents:
                 raise InsufficientBalance("Saldo insuficiente")
 
             now = utcnow()
@@ -375,27 +475,27 @@ class Database:
             )
             if claimed.rowcount != 1:
                 raise OutOfStock("La key fue tomada; intenta nuevamente")
-            balance = user["balance_cents"] - product["price_cents"]
+            balance = user["balance_cents"] - price_cents
             con.execute(
                 "UPDATE users SET balance_cents=?, updated_at=? WHERE telegram_id=?",
                 (balance, now, user_id),
             )
             cur = con.execute(
                 "INSERT INTO orders(user_id, product_id, inventory_key_id, amount_cents, created_at) VALUES(?,?,?,?,?)",
-                (user_id, product_id, key["id"], product["price_cents"], now),
+                (user_id, product_id, key["id"], price_cents, now),
             )
             order_id = int(cur.lastrowid)
             con.execute(
                 "INSERT INTO ledger(user_id, kind, amount_cents, balance_after_cents, reference, created_at) VALUES(?,?,?,?,?,?)",
-                (user_id, "purchase", -product["price_cents"], balance, f"order:{order_id}", now),
+                (user_id, "purchase", -price_cents, balance, f"order:{order_id}", now),
             )
             return {
                 "order_id": order_id,
                 "product_name": product["name"],
                 "key": key["secret_value"],
-                "price_cents": product["price_cents"],
+                "price_cents": price_cents,
                 "balance_cents": balance,
-                "file": con.execute("SELECT file_id,file_name FROM product_files WHERE product_id=?", (product_id,)).fetchone(),
+                "file": con.execute("SELECT file_id,file_name,file_data FROM product_files WHERE product_id=?", (product_id,)).fetchone(),
             }
 
     def history(self, user_id: int, limit: int = 10) -> list[sqlite3.Row]:

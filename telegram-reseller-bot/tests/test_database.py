@@ -55,6 +55,24 @@ class DatabaseTests(unittest.TestCase):
         self.assertFalse(self.db.activate_partner("partner1", "secret123", 333))
         self.assertEqual(self.db.user(222)["role"], "reseller")
 
+    def test_admin_balance_adjustment_and_special_price(self):
+        self.assertEqual(self.db.adjust_balance(2, 3000, 1), 3000)
+        self.db.set_reseller_price(2, self.product, 700)
+        self.db.add_keys(self.product, ["SPECIAL-KEY"])
+        sale = self.db.purchase(2, self.product)
+        self.assertEqual(sale["price_cents"], 700)
+        self.assertEqual(sale["balance_cents"], 2300)
+        with self.assertRaises(InsufficientBalance):
+            self.db.adjust_balance(2, -3000, 1)
+
+    def test_product_file_bytes_are_returned_with_sale(self):
+        self.credit(1000)
+        self.db.add_keys(self.product, ["FILE-KEY"])
+        self.db.set_product_file(self.product, "admin-only-file-id", "tool.zip", b"zip-content")
+        sale = self.db.purchase(2, self.product)
+        self.assertEqual(sale["file"]["file_name"], "tool.zip")
+        self.assertEqual(sale["file"]["file_data"], b"zip-content")
+
 
 if __name__ == "__main__":
     unittest.main()
