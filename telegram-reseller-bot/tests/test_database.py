@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from database import Database, InsufficientBalance, OutOfStock
+from database import Database, InsufficientBalance, OutOfStock, ProductRestricted
 
 
 class DatabaseTests(unittest.TestCase):
@@ -72,6 +72,35 @@ class DatabaseTests(unittest.TestCase):
         sale = self.db.purchase(2, self.product)
         self.assertEqual(sale["file"]["file_name"], "tool.zip")
         self.assertEqual(sale["file"]["file_data"], b"zip-content")
+
+    def test_purchase_tracks_duration_and_my_keys(self):
+        timed = self.db.create_product("31 Days", 400, "", 31, "Activate it")
+        self.credit(1000)
+        self.db.add_keys(timed, ["TIME-KEY"])
+        sale = self.db.purchase(2, timed)
+        self.assertEqual(sale["duration_days"], 31)
+        self.assertTrue(sale["expires_at"])
+        keys = self.db.user_keys(2)
+        self.assertEqual(keys[0]["secret_value"], "TIME-KEY")
+        self.assertEqual(keys[0]["duration_days"], 31)
+
+    def test_product_limit_blocks_purchase(self):
+        self.credit(1000)
+        self.db.add_keys(self.product, ["BLOCKED-KEY"])
+        allowed = self.db.toggle_product_access(2, self.product)
+        self.assertFalse(allowed)
+        with self.assertRaises(ProductRestricted):
+            self.db.purchase(2, self.product)
+        self.assertEqual(self.db.product(self.product)["stock"], 1)
+
+    def test_created_admin_role_and_initial_balance(self):
+        self.db.ensure_user(444, "helper", "Helper", False)
+        self.db.create_partner("helperadmin", "secret123", 2500, "admin")
+        self.assertTrue(self.db.activate_partner("helperadmin", "secret123", 444))
+        self.assertEqual(self.db.user(444)["role"], "admin")
+        self.assertEqual(self.db.user(444)["balance_cents"], 2500)
+        self.assertTrue(self.db.activate_partner("helperadmin", "secret123", 444))
+        self.assertEqual(self.db.user(444)["balance_cents"], 2500)
 
 
 if __name__ == "__main__":

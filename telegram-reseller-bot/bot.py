@@ -4,10 +4,13 @@ import asyncio
 import hashlib
 import html
 import io
+import json
 import logging
 import os
 import signal
 import sqlite3
+import urllib.request
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
@@ -15,7 +18,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from config import load_settings
-from database import Database, InsufficientBalance, NotApproved, NotFound, OutOfStock, StoreError
+from database import Database, InsufficientBalance, NotApproved, NotFound, OutOfStock, ProductRestricted, StoreError
 from health import start_health_server
 
 
@@ -28,15 +31,17 @@ db = Database(settings.database_path)
 
 ADMIN_MENU = ReplyKeyboardMarkup(
     [[KeyboardButton("📦 Productos"), KeyboardButton("🔑 Añadir keys")],
-     [KeyboardButton("📎 Archivos"), KeyboardButton("➕ Crear socio")],
-     [KeyboardButton("👥 Revendedores"), KeyboardButton("💳 Recargas")],
-     [KeyboardButton("📢 Anuncios"), KeyboardButton("📊 Estadísticas")]],
+     [KeyboardButton("📎 Archivos"), KeyboardButton("🎨 Multimedia")],
+     [KeyboardButton("➕ Crear socio"), KeyboardButton("👥 Revendedores")],
+     [KeyboardButton("💳 Recargas"), KeyboardButton("📢 Anuncios")],
+     [KeyboardButton("📊 Estadísticas")]],
     resize_keyboard=True,
 )
 USER_MENU = ReplyKeyboardMarkup(
     [[KeyboardButton("🛒 Comprar keys"), KeyboardButton("💳 Recargar saldo")],
-     [KeyboardButton("👤 Mi cuenta"), KeyboardButton("🧾 Historial")],
-     [KeyboardButton("🆘 Soporte")]],
+     [KeyboardButton("🔑 Mis keys"), KeyboardButton("👤 Mi cuenta")],
+     [KeyboardButton("🧾 Historial"), KeyboardButton("🆘 Soporte")],
+    ],
     resize_keyboard=True,
 )
 PENDING_MENU = ReplyKeyboardMarkup(
@@ -59,6 +64,48 @@ def parse_amount(value: str) -> int:
     return cents
 
 
+def format_date(value: str) -> str:
+    return datetime.fromisoformat(value).astimezone(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+
+
+def remaining_time(expires_at: str) -> tuple[str, bool]:
+    seconds = int((datetime.fromisoformat(expires_at) - datetime.now(timezone.utc)).total_seconds())
+    if seconds <= 0:
+        return "Expirada", False
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    return f"{days}d {hours}h {minutes}m", True
+
+
+async def notify_key_api(sale: dict, user_id: int) -> None:
+    if not settings.key_api_url:
+        return
+    payload = json.dumps({
+        "event": "key_purchased",
+        "order_id": sale["order_id"],
+        "telegram_user_id": user_id,
+        "product": sale["product_name"],
+        "key": sale["key"],
+        "duration_days": sale["duration_days"],
+        "expires_at": sale["expires_at"],
+    }).encode()
+
+    def post() -> None:
+        headers = {"Content-Type": "application/json"}
+        if settings.key_api_token:
+            headers["Authorization"] = f"Bearer {settings.key_api_token}"
+        request = urllib.request.Request(settings.key_api_url, data=payload, headers=headers, method="POST")
+        with urllib.request.urlopen(request, timeout=15) as response:
+            if response.status >= 300:
+                raise RuntimeError(f"API respondió {response.status}")
+
+    try:
+        await asyncio.to_thread(post)
+    except Exception as exc:
+        log.warning("No se pudo notificar al API de keys: %s", exc)
+
+
 def current_user(update: Update):
     tg = update.effective_user
     return db.ensure_user(tg.id, tg.username, tg.full_name, tg.id in settings.admin_ids)
@@ -66,7 +113,7 @@ def current_user(update: Update):
 
 def is_admin(user_id: int) -> bool:
     row = db.user(user_id)
-    return bool(row and row["role"] == "admin" and user_id in settings.admin_ids)
+    return bool(row and row["role"] == "admin")
 
 
 def panel(context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -85,13 +132,23 @@ async def send_home(update: Update, context: ContextTypes.DEFAULT_TYPE, note: st
     user = current_user(update)
     chat = update.effective_chat
     if panel(context) == "admin":
-        if update.effective_user.id not in settings.admin_ids:
+        if not is_admin(update.effective_user.id):
             await chat.send_message("⛔ Este bot es privado y exclusivo para el administrador.")
             return
-        text = note or f"🛡️ <b>{html.escape(settings.store_name)}</b>\nPanel de administrador"
+        text = note or (
+            f"🛡️ <b>{html.escape(settings.store_name)}</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "⚙️ <b>CENTRO DE ADMINISTRACIÓN</b>\n"
+            "Administra productos, socios, saldos y anuncios."
+        )
         await chat.send_message(text, reply_markup=ADMIN_MENU, parse_mode=ParseMode.HTML)
     elif user["role"] in ("reseller", "admin"):
-        text = note or f"💎 <b>{html.escape(settings.store_name)}</b>\nSaldo: <b>{money(user['balance_cents'])}</b>"
+        text = note or (
+            f"💎 <b>{html.escape(settings.store_name)}</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"👤 Socio verificado\n💰 Saldo disponible: <b>{money(user['balance_cents'])}</b>\n"
+            "Selecciona una opción del menú."
+        )
         await chat.send_message(text, reply_markup=USER_MENU, parse_mode=ParseMode.HTML)
     else:
         label = "Tu solicitud está esperando revisión." if user["requested_access"] else "Solicita acceso para entrar como revendedor."
@@ -113,7 +170,7 @@ async def notify_access_request(context: ContextTypes.DEFAULT_TYPE, user) -> Non
         InlineKeyboardButton("✅ Aprobar", callback_data=f"user:approve:{user['telegram_id']}"),
         InlineKeyboardButton("❌ Rechazar", callback_data=f"user:reject:{user['telegram_id']}"),
     ]])
-    for admin_id in settings.admin_ids:
+    for admin_id in set(settings.admin_ids) | set(db.admin_ids()):
         try:
             await admin_bot(context).send_message(admin_id, text, reply_markup=keys, parse_mode=ParseMode.HTML)
         except Exception as exc:
@@ -156,7 +213,10 @@ async def show_products_admin(update: Update) -> None:
     rows = [[InlineKeyboardButton("➕ Crear producto", callback_data="product:new")]]
     for p in products:
         status = "✅" if p["active"] else "⛔"
-        lines.append(f"{status} ID {p['id']} · {html.escape(p['name'])} · {money(p['price_cents'])} · Stock {p['stock']}")
+        lines.append(
+            f"{status} ID {p['id']} · {html.escape(p['name'])} · {money(p['price_cents'])} · "
+            f"{p['duration_days']} días · Stock {p['stock']}"
+        )
         rows.append([InlineKeyboardButton(
             f"{'Desactivar' if p['active'] else 'Activar'} · {p['name']}", callback_data=f"product:toggle:{p['id']}"
         )])
@@ -194,6 +254,7 @@ async def show_partner_manager(message, target: int) -> None:
         [InlineKeyboardButton("➕ Agregar saldo", callback_data=f"partner:add:{target}"),
          InlineKeyboardButton("➖ Quitar saldo", callback_data=f"partner:subtract:{target}")],
         [InlineKeyboardButton("💲 Precio especial", callback_data=f"partner:prices:{target}")],
+        [InlineKeyboardButton("🔐 Límites de compra", callback_data=f"partner:limits:{target}")],
         [InlineKeyboardButton("⚠️ Enviar advertencia", callback_data=f"partner:warn:{target}")],
         [InlineKeyboardButton("🚫 Revocar acceso", callback_data=f"user:revoke:{target}")],
     ])
@@ -255,6 +316,31 @@ async def show_history(update: Update) -> None:
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
+async def show_my_keys(update: Update) -> None:
+    rows = db.user_keys(update.effective_user.id)
+    if not rows:
+        await update.effective_message.reply_text("🔑 <b>Mis keys</b>\nTodavía no has comprado ninguna key.", parse_mode=ParseMode.HTML)
+        return
+    for row in rows:
+        if not row["expires_at"]:
+            status, active = "Sin seguimiento (compra antigua)", False
+        else:
+            status, active = remaining_time(row["expires_at"])
+        icon = "🟢" if active else "🔴"
+        await update.effective_message.reply_text(
+            "🔐 <b>LICENCIA DIGITAL</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"📦 Producto: <b>{html.escape(row['name'])}</b>\n"
+            f"🔑 Key: <code>{html.escape(row['secret_value'])}</code>\n"
+            f"🧾 Referencia: <code>#{row['id']}</code>\n"
+            f"📅 Compra: {format_date(row['created_at'])}\n"
+            f"⏳ Duración: {row['duration_days'] or '?'} días\n"
+            f"{icon} Tiempo restante: <b>{status}</b>" +
+            (f"\n⌛ Vence: {format_date(row['expires_at'])}" if row["expires_at"] else ""),
+            parse_mode=ParseMode.HTML,
+        )
+
+
 async def show_stats(update: Update) -> None:
     s = db.stats()
     await update.effective_message.reply_text(
@@ -278,11 +364,19 @@ async def begin_product_file(update: Update) -> None:
     await update.effective_message.reply_text("📎 Selecciona el producto:", reply_markup=product_buttons("addfile", active_only=False))
 
 
+async def begin_product_media(update: Update) -> None:
+    await update.effective_message.reply_text(
+        "🎨 <b>Multimedia del producto</b>\nSelecciona el producto para agregar foto o sticker animado:",
+        reply_markup=product_buttons("media", active_only=False),
+        parse_mode=ParseMode.HTML,
+    )
+
+
 async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = current_user(update)
     text = (update.effective_message.text or "").strip()
     admin_panel = panel(context) == "admin"
-    if admin_panel and update.effective_user.id not in settings.admin_ids:
+    if admin_panel and not is_admin(update.effective_user.id):
         await update.effective_message.reply_text("⛔ Este bot es privado y exclusivo para el administrador.")
         return
     if text == "📨 Solicitar acceso":
@@ -305,6 +399,8 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await show_buy(update)
     elif not admin_panel and text == "💳 Recargar saldo":
         await begin_topup(update, context)
+    elif not admin_panel and text == "🔑 Mis keys":
+        await show_my_keys(update)
     elif not admin_panel and text == "👤 Mi cuenta":
         await show_account(update)
     elif not admin_panel and text == "🧾 Historial":
@@ -317,6 +413,8 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await begin_add_keys(update)
     elif admin_panel and user["role"] == "admin" and text == "📎 Archivos":
         await begin_product_file(update)
+    elif admin_panel and user["role"] == "admin" and text == "🎨 Multimedia":
+        await begin_product_media(update)
     elif admin_panel and user["role"] == "admin" and text == "➕ Crear socio":
         context.user_data["flow"] = {"name": "partner_create_login"}
         await update.effective_message.reply_text("👤 Escribe el usuario para el socio:")
@@ -352,21 +450,50 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         if not ok:
             await message.reply_text("❌ Usuario o contraseña incorrectos, o la cuenta ya fue vinculada.", reply_markup=PENDING_MENU)
         else:
-            await message.reply_text("✅ Cuenta vinculada. Ya eres socio revendedor.", reply_markup=USER_MENU)
+            linked = db.user(message.from_user.id)
+            if linked["role"] == "admin":
+                await message.reply_text(
+                    "✅ Cuenta vinculada con rol <b>Administrador</b>.\nYa puedes abrir el bot privado de administración.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=USER_MENU,
+                )
+            else:
+                await message.reply_text("✅ Cuenta vinculada. Ya eres socio comprador.", reply_markup=USER_MENU)
         return True
     if flow["name"] == "partner_create_login":
         flow["name"], flow["login"] = "partner_create_password", text
         await message.reply_text("🔑 Escribe una contraseña de mínimo 6 caracteres:")
         return True
     if flow["name"] == "partner_create_password":
+        if len(text) < 6:
+            await message.reply_text("❌ La contraseña debe tener mínimo 6 caracteres.")
+            return True
+        flow["name"], flow["password"] = "partner_create_role", text
+        keys = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛡️ Administrador", callback_data="newrole:admin"),
+            InlineKeyboardButton("🛒 Socio comprador", callback_data="newrole:reseller"),
+        ]])
+        await message.reply_text("👤 <b>Elige el rol de la nueva cuenta:</b>", reply_markup=keys, parse_mode=ParseMode.HTML)
+        return True
+    if flow["name"] == "partner_create_balance":
         try:
-            db.create_partner(flow["login"], text)
+            initial_balance = 0 if text in ("0", "0.00", "$0") else parse_amount(text)
+            db.create_partner(flow["login"], flow["password"], initial_balance, flow["target_role"])
         except (ValueError, sqlite3.IntegrityError) as exc:
             await message.reply_text(f"❌ {exc}")
             return True
         login = flow["login"]
+        password = flow["password"]
         context.user_data.pop("flow", None)
-        await message.reply_text(f"✅ Socio creado.\nUsuario: <code>{html.escape(login)}</code>\nContraseña: <code>{html.escape(text)}</code>", parse_mode=ParseMode.HTML, reply_markup=ADMIN_MENU)
+        await message.reply_text(
+            "✅ <b>Socio creado</b>\n━━━━━━━━━━━━━━━━━━\n"
+            f"Usuario: <code>{html.escape(login)}</code>\n"
+            f"Contraseña: <code>{html.escape(password)}</code>\n"
+            f"Rol: <b>{'Administrador' if flow['target_role'] == 'admin' else 'Socio comprador'}</b>\n"
+            f"Saldo al vincularse: <b>{money(initial_balance)}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=ADMIN_MENU,
+        )
         return True
     if flow["name"] == "broadcast":
         sent = failed = 0
@@ -377,6 +504,21 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         if message.photo:
             kind = "photo"
             tg_file = await context.bot.get_file(message.photo[-1].file_id)
+            payload = bytes(await tg_file.download_as_bytearray())
+        elif message.animation:
+            kind = "animation"
+            filename = message.animation.file_name or "anuncio.gif"
+            tg_file = await context.bot.get_file(message.animation.file_id)
+            payload = bytes(await tg_file.download_as_bytearray())
+        elif message.video:
+            kind = "video"
+            filename = message.video.file_name or "anuncio.mp4"
+            tg_file = await context.bot.get_file(message.video.file_id)
+            payload = bytes(await tg_file.download_as_bytearray())
+        elif message.sticker:
+            kind = "sticker"
+            filename = "anuncio.tgs" if message.sticker.is_animated else ("anuncio.webm" if message.sticker.is_video else "anuncio.webp")
+            tg_file = await context.bot.get_file(message.sticker.file_id)
             payload = bytes(await tg_file.download_as_bytearray())
         elif message.document:
             kind = "document"
@@ -390,6 +532,18 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             try:
                 if kind == "photo":
                     await reseller_bot(context).send_photo(target, io.BytesIO(payload), caption=caption)
+                elif kind == "animation":
+                    stream = io.BytesIO(payload)
+                    stream.name = filename
+                    await reseller_bot(context).send_animation(target, stream, caption=caption)
+                elif kind == "video":
+                    stream = io.BytesIO(payload)
+                    stream.name = filename
+                    await reseller_bot(context).send_video(target, stream, caption=caption)
+                elif kind == "sticker":
+                    stream = io.BytesIO(payload)
+                    stream.name = filename
+                    await reseller_bot(context).send_sticker(target, stream)
                 elif kind == "document":
                     stream = io.BytesIO(payload)
                     stream.name = filename
@@ -400,7 +554,11 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             except Exception:
                 failed += 1
         context.user_data.pop("flow", None)
-        await message.reply_text(f"✅ Anuncio enviado: {sent}\nNo entregados: {failed}", reply_markup=ADMIN_MENU)
+        await message.reply_text(
+            f"📢 <b>Reporte del anuncio</b>\n✅ Entregados: {sent}\n❌ No entregados: {failed}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=ADMIN_MENU,
+        )
         return True
     if flow["name"] == "product_file":
         if not message.document:
@@ -417,6 +575,29 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         )
         context.user_data.pop("flow", None)
         await message.reply_text("✅ Archivo vinculado al producto.", reply_markup=ADMIN_MENU)
+        return True
+
+    if flow["name"] == "product_photo":
+        if not message.photo:
+            await message.reply_text("❌ Envía una foto de Telegram.")
+            return True
+        tg_file = await context.bot.get_file(message.photo[-1].file_id)
+        data = bytes(await tg_file.download_as_bytearray())
+        db.set_product_photo(flow["product_id"], data)
+        context.user_data.pop("flow", None)
+        await message.reply_text("✅ Foto profesional guardada para el producto.", reply_markup=ADMIN_MENU)
+        return True
+
+    if flow["name"] == "product_sticker":
+        if not message.sticker:
+            await message.reply_text("❌ Envía un sticker de Telegram; puede ser animado 3D.")
+            return True
+        tg_file = await context.bot.get_file(message.sticker.file_id)
+        data = bytes(await tg_file.download_as_bytearray())
+        name = "product.tgs" if message.sticker.is_animated else ("product.webm" if message.sticker.is_video else "product.webp")
+        db.set_product_sticker(flow["product_id"], data, name)
+        context.user_data.pop("flow", None)
+        await message.reply_text("✅ Sticker guardado para el producto.", reply_markup=ADMIN_MENU)
         return True
 
     if flow["name"] in ("partner_balance_add", "partner_balance_subtract"):
@@ -514,7 +695,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             InlineKeyboardButton("❌ Rechazar", callback_data=f"topup:reject:{topup_id}"),
         ]])
         caption = f"💳 <b>Nueva recarga #{topup_id}</b>\nUsuario: <code>{item['user_id']}</code>\nCantidad: <b>{money(item['amount_cents'])}</b>"
-        for admin_id in settings.admin_ids:
+        for admin_id in set(settings.admin_ids) | set(db.admin_ids()):
             try:
                 if proof_type == "photo":
                     await admin_bot(context).send_photo(admin_id, io.BytesIO(proof_blob), caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
@@ -542,15 +723,43 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         except ValueError:
             await message.reply_text("❌ Precio inválido. Ejemplo: 14.99")
             return True
+        flow["name"] = "product_duration"
+        await message.reply_text("⏳ Escribe la duración de la key en días. Ejemplos: <code>1</code>, <code>7</code>, <code>31</code>, <code>365</code>.", parse_mode=ParseMode.HTML)
+        return True
+
+    if flow["name"] == "product_duration":
+        try:
+            days = int(text)
+            if days < 1 or days > 3650:
+                raise ValueError
+        except ValueError:
+            await message.reply_text("❌ Duración inválida. Escribe solamente el número de días.")
+            return True
+        flow["duration_days"] = days
         flow["name"] = "product_description"
         await message.reply_text("📝 Escribe una descripción corta o envía <code>-</code> para omitirla.", parse_mode=ParseMode.HTML)
         return True
 
     if flow["name"] == "product_description":
-        desc = "" if text == "-" else text[:500]
-        product_id = db.create_product(flow["product_name"], flow["price_cents"], desc)
+        flow["description"] = "" if text == "-" else text[:500]
+        flow["name"] = "product_instructions"
+        await message.reply_text(
+            "📋 Escribe las instrucciones que recibirá el comprador. Ejemplo: cómo activar la key y usar la IPA. Envía <code>-</code> para usar un mensaje básico.",
+            parse_mode=ParseMode.HTML,
+        )
+        return True
+
+    if flow["name"] == "product_instructions":
+        instructions = "Activa tu key siguiendo las instrucciones incluidas con el archivo." if text == "-" else text[:1500]
+        product_id = db.create_product(
+            flow["product_name"], flow["price_cents"], flow["description"], flow["duration_days"], instructions
+        )
         context.user_data.pop("flow", None)
-        await message.reply_text(f"✅ Producto #{product_id} creado.", reply_markup=ADMIN_MENU)
+        await message.reply_text(
+            f"✅ Producto #{product_id} creado con duración de {flow['duration_days']} días.\n"
+            "Ahora puedes agregar sus keys, archivo, foto y sticker animado.",
+            reply_markup=ADMIN_MENU,
+        )
         return True
 
     if flow["name"] == "add_keys":
@@ -570,6 +779,26 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     admin_panel = panel(context) == "admin"
     if data == "noop":
         await query.answer()
+        return
+
+    if data.startswith("newrole:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        flow = context.user_data.get("flow")
+        if not flow or flow.get("name") != "partner_create_role":
+            await query.answer("Esta creación ya terminó", show_alert=True)
+            return
+        role = data.split(":", 1)[1]
+        if role not in ("admin", "reseller"):
+            await query.answer("Rol inválido", show_alert=True)
+            return
+        flow["name"], flow["target_role"] = "partner_create_balance", role
+        await query.answer()
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            "💰 Escribe el saldo inicial. Usa <code>0</code> si no tendrá saldo.", parse_mode=ParseMode.HTML
+        )
         return
 
     if data.startswith("partner:"):
@@ -609,6 +838,33 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.message.reply_text(
                 "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows) if rows else None, parse_mode=ParseMode.HTML
             )
+        elif action == "limits":
+            await query.answer()
+            access = db.product_access(target)
+            rows = [[InlineKeyboardButton(
+                f"{'✅ Permitido' if p['allowed'] else '🚫 Bloqueado'} · {p['name']}",
+                callback_data=f"access:{target}:{p['id']}",
+            )] for p in access]
+            await query.message.reply_text(
+                "🔐 <b>Límites de compra</b>\nToca un producto para permitirlo o bloquearlo.",
+                reply_markup=InlineKeyboardMarkup(rows) if rows else None,
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
+    if data.startswith("access:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        _, raw_target, raw_product = data.split(":")
+        allowed = db.toggle_product_access(int(raw_target), int(raw_product))
+        await query.answer("Producto permitido" if allowed else "Producto bloqueado", show_alert=True)
+        product = db.product(int(raw_product))
+        await query.message.reply_text(
+            f"{'✅' if allowed else '🚫'} {html.escape(product['name'])}: "
+            f"{'el socio puede comprarlo' if allowed else 'el socio no puede comprarlo'}.",
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     if data.startswith("partnerprice:"):
@@ -682,6 +938,32 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.message.reply_text("📎 Envía el archivo como documento.")
         return
 
+    if data.startswith("media:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        product_id = int(data.split(":")[1])
+        await query.answer()
+        keys = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🖼️ Agregar foto", callback_data=f"media-photo:{product_id}"),
+            InlineKeyboardButton("✨ Sticker 3D", callback_data=f"media-sticker:{product_id}"),
+        ]])
+        await query.message.reply_text("🎨 Selecciona el tipo de multimedia:", reply_markup=keys)
+        return
+
+    if data.startswith("media-photo:") or data.startswith("media-sticker:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        product_id = int(data.rsplit(":", 1)[1])
+        is_photo = data.startswith("media-photo:")
+        context.user_data["flow"] = {"name": "product_photo" if is_photo else "product_sticker", "product_id": product_id}
+        await query.answer()
+        await query.message.reply_text(
+            "🖼️ Envía la foto del producto." if is_photo else "✨ Envía el sticker de Telegram; puede ser animado o 3D."
+        )
+        return
+
     if data.startswith("buy:"):
         if admin_panel:
             await query.answer("Usa el bot de revendedores", show_alert=True)
@@ -691,7 +973,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         product_id = int(data.split(":")[1])
         p = db.product_for_user(product_id, query.from_user.id)
-        if not p or not p["active"]:
+        if not p or not p["active"] or not p["allowed"]:
             await query.answer("Producto no disponible", show_alert=True)
             return
         await query.answer()
@@ -699,10 +981,29 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             InlineKeyboardButton("✅ Confirmar compra", callback_data=f"confirm:{product_id}"),
             InlineKeyboardButton("❌ Cancelar", callback_data="cancel"),
         ]])
-        await query.message.reply_text(
-            f"<b>{html.escape(p['name'])}</b>\nPrecio: {money(p['effective_price_cents'])}\nStock: {p['stock']}\n\n¿Confirmar compra?",
-            reply_markup=keys, parse_mode=ParseMode.HTML,
+        caption = (
+            "💎 <b>PRODUCTO DIGITAL</b>\n━━━━━━━━━━━━━━━━━━\n"
+            f"📦 <b>{html.escape(p['name'])}</b>\n"
+            f"💵 Precio socio: <b>{money(p['effective_price_cents'])}</b>\n"
+            f"⏳ Duración: <b>{p['duration_days']} días</b>\n"
+            f"🔑 Stock disponible: <b>{p['stock']}</b>\n"
+            f"📝 {html.escape(p['description']) if p['description'] else 'Entrega automática inmediata'}\n\n"
+            "¿Confirmar compra?"
         )
+        media = db.product_media(product_id)
+        if media and media["sticker_data"]:
+            try:
+                sticker = io.BytesIO(media["sticker_data"])
+                sticker.name = media["sticker_name"] or "product.webp"
+                await query.message.reply_sticker(sticker)
+            except Exception as exc:
+                log.warning("No se pudo mostrar sticker del producto %s: %s", product_id, exc)
+        if media and media["photo_data"]:
+            photo = io.BytesIO(media["photo_data"])
+            photo.name = media["photo_name"] or "product.jpg"
+            await query.message.reply_photo(photo, caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
+        else:
+            await query.message.reply_text(caption, reply_markup=keys, parse_mode=ParseMode.HTML)
         return
 
     if data.startswith("confirm:"):
@@ -712,16 +1013,22 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         product_id = int(data.split(":")[1])
         try:
             sale = db.purchase(query.from_user.id, product_id)
-        except (InsufficientBalance, OutOfStock, NotApproved, NotFound) as exc:
+        except (InsufficientBalance, OutOfStock, NotApproved, NotFound, ProductRestricted) as exc:
             await query.answer(str(exc), show_alert=True)
             return
         await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
-            "✅ <b>Compra completada</b>\n"
-            f"Orden: #{sale['order_id']}\nProducto: {html.escape(sale['product_name'])}\n"
-            f"Key: <code>{html.escape(sale['key'])}</code>\nSaldo restante: <b>{money(sale['balance_cents'])}</b>\n\n"
-            "Guarda esta key en un lugar seguro.",
+            "🎉 <b>¡GRACIAS POR TU COMPRA!</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"📦 Producto: <b>{html.escape(sale['product_name'])}</b>\n"
+            f"🔑 Tu key: <code>{html.escape(sale['key'])}</code>\n"
+            f"🧾 Referencia: <code>#{sale['order_id']}</code>\n"
+            f"⏳ Duración: <b>{sale['duration_days']} días</b>\n"
+            f"⌛ Vence: <b>{format_date(sale['expires_at'])}</b>\n"
+            f"💰 Saldo restante: <b>{money(sale['balance_cents'])}</b>\n\n"
+            f"📋 <b>Activación</b>\n{html.escape(sale['instructions'])}\n\n"
+            "Puedes revisar el tiempo restante cuando quieras en <b>🔑 Mis keys</b>.",
             parse_mode=ParseMode.HTML,
         )
         if sale["file"]:
@@ -731,6 +1038,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await query.message.reply_document(stream, caption="📎 Archivo del producto")
             except Exception:
                 await query.message.reply_text("⚠️ La key fue entregada, pero el archivo necesita que el Admin lo vuelva a subir.")
+        await notify_key_api(sale, query.from_user.id)
         return
 
     if data == "cancel":

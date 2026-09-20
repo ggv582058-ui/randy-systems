@@ -10,6 +10,12 @@ Dos bots de Telegram conectados al mismo inventario: uno privado para el Admin y
 - Carga masiva de keys, una por línea, con bloqueo de duplicados.
 - Recargas manuales con comprobante y aprobación/rechazo del Admin.
 - Entrega automática de una sola key después de descontar el saldo.
+- Duración configurable por producto y cuenta regresiva en **Mis keys**.
+- Foto, sticker animado y archivo descargable por producto.
+- Precios y permisos de compra individuales para cada socio.
+- Creación de cuentas con rol de socio o administrador y saldo inicial.
+- Anuncios masivos de texto, foto, video, animación, sticker o documento.
+- Webhook opcional para conectar compras con un API externo.
 - Historial contable, órdenes y estadísticas.
 - Compra y aprobación transaccionales para evitar cobrar o entregar dos veces.
 - Archivo `render.yaml` y disco persistente para funcionamiento 24/7.
@@ -31,6 +37,8 @@ ADMIN_IDS=7883560984
 STORE_NAME=RANDY RESELLER SYSTEMS
 SUPPORT_USERNAME=@Randy_zt
 DATABASE_PATH=data/reseller.db
+KEY_API_URL=https://tu-api.example.com/eventos
+KEY_API_TOKEN=token_opcional_del_api
 ```
 
 4. Instala y ejecuta:
@@ -64,6 +72,6 @@ Sube el proyecto a GitHub y crea un Blueprint usando `render.yaml`. Tu ID Admin 
 ## Seguridad
 
 - El token nunca está escrito en el código.
-- Las acciones Admin validan tanto el rol guardado como `ADMIN_IDS`.
+- Las acciones Admin validan el rol guardado; el administrador principal nace de `ADMIN_IDS` y puede crear otros administradores.
 - La aprobación de recargas es idempotente: pulsar dos veces no duplica saldo.
 - La compra usa una transacción exclusiva: una key solo puede venderse una vez.

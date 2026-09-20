@@ -22,6 +22,8 @@ class Settings:
     database_path: Path
     store_name: str
     support_username: str
+    key_api_url: str
+    key_api_token: str
 
 
 def load_settings() -> Settings:
@@ -44,4 +46,6 @@ def load_settings() -> Settings:
         database_path=db_path,
         store_name=os.getenv("STORE_NAME", "RANDY RESELLER SYSTEMS").strip(),
         support_username=os.getenv("SUPPORT_USERNAME", "@Randy_zt").strip(),
+        key_api_url=os.getenv("KEY_API_URL", "").strip(),
+        key_api_token=os.getenv("KEY_API_TOKEN", "").strip(),
     )
