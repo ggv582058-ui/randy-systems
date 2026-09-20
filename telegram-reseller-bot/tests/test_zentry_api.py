@@ -69,6 +69,31 @@ class ZentryClientTests(unittest.TestCase):
         self.assertEqual(captured["headers"]["X-seller-key"], "seller-key")
         self.assertEqual(captured["headers"]["X-seller-secret"], "seller-secretwrapped")
 
+    def test_create_license_accepts_nested_key_response(self):
+        client = ZentryClient(
+            "https://api.zentryauth.com", "seller", "secret",
+            opener=lambda _request, timeout: FakeResponse({
+                "success": True, "data": {"license": {"key": "RANDY-NESTED"}}
+            }),
+        )
+        self.assertEqual(client.create_license(31), "RANDY-NESTED")
+
+    def test_create_license_accepts_camel_case_response(self):
+        client = ZentryClient(
+            "https://api.zentryauth.com", "seller", "secret",
+            opener=lambda _request, timeout: FakeResponse({
+                "success": True, "result": {"licenseKey": "RANDY-CAMEL"}
+            }),
+        )
+        self.assertEqual(client.create_license(31), "RANDY-CAMEL")
+
+    def test_create_license_accepts_string_data_response(self):
+        client = ZentryClient(
+            "https://api.zentryauth.com", "seller", "secret",
+            opener=lambda _request, timeout: FakeResponse({"success": True, "data": "RANDY-DIRECT"}),
+        )
+        self.assertEqual(client.create_license(31), "RANDY-DIRECT")
+
 
 if __name__ == "__main__":
     unittest.main()

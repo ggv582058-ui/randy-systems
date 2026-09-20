@@ -89,11 +89,39 @@ class ZentryClient:
             "/seller/v1/licenses/create",
             {"duration_type": "days", "duration_value": duration_days, "key_prefix": prefix},
         )
-        data = result.get("data") or {}
-        key = data.get("license_key") if isinstance(data, dict) else None
+        data = result.get("data")
+        key = data.strip() if isinstance(data, str) and data.strip() else self._find_license_key(result)
         if not key:
             raise ZentryError("ZentryAuth no devolvió la licencia creada")
-        return str(key)
+        return key
+
+    @classmethod
+    def _find_license_key(cls, payload: Any) -> str | None:
+        """Accept the response shapes used by different Zentry API versions."""
+        if isinstance(payload, dict):
+            for field in ("license_key", "licenseKey", "key", "license"):
+                value = payload.get(field)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            # Prefer common response containers, then inspect any remaining
+            # nested objects. Exact field names above prevent returning a
+            # message, seller credential, or unrelated ID.
+            for field in ("data", "result", "license"):
+                if field in payload:
+                    found = cls._find_license_key(payload[field])
+                    if found:
+                        return found
+            for value in payload.values():
+                if isinstance(value, (dict, list)):
+                    found = cls._find_license_key(value)
+                    if found:
+                        return found
+        elif isinstance(payload, list):
+            for value in payload:
+                found = cls._find_license_key(value)
+                if found:
+                    return found
+        return None
 
     def reset_hwid(self, license_key: str) -> dict[str, Any]:
         return self._post("/seller/v1/licenses/reset", {"license_key": license_key})
