@@ -50,6 +50,27 @@ class Database:
         con.execute("PRAGMA journal_mode=WAL")
         return con
 
+    def backup(self, keep: int = 10) -> Path | None:
+        """Create a consistent on-disk backup before startup migrations."""
+        source_path = Path(self.path)
+        if not source_path.exists() or source_path.stat().st_size == 0:
+            return None
+        backup_dir = source_path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup_path = backup_dir / f"{source_path.stem}-{stamp}.db"
+        source = sqlite3.connect(self.path, timeout=30)
+        destination = sqlite3.connect(backup_path)
+        try:
+            source.backup(destination)
+        finally:
+            destination.close()
+            source.close()
+        backups = sorted(backup_dir.glob(f"{source_path.stem}-*.db"), reverse=True)
+        for old in backups[max(1, keep):]:
+            old.unlink(missing_ok=True)
+        return backup_path
+
     @contextmanager
     def transaction(self):
         con = self.connect()
@@ -64,6 +85,7 @@ class Database:
             con.close()
 
     def initialize(self) -> None:
+        self.backup()
         with self.connect() as con:
             con.executescript(
                 """
@@ -75,6 +97,10 @@ class Database:
                         CHECK(role IN ('pending','reseller','admin','rejected')),
                     balance_cents INTEGER NOT NULL DEFAULT 0 CHECK(balance_cents >= 0),
                     requested_access INTEGER NOT NULL DEFAULT 0,
+                    tier TEXT NOT NULL DEFAULT 'regular'
+                        CHECK(tier IN ('regular','vip')),
+                    language TEXT NOT NULL DEFAULT 'es'
+                        CHECK(language IN ('es','en')),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -144,6 +170,9 @@ class Database:
                     password_salt TEXT NOT NULL,
                     telegram_id INTEGER UNIQUE REFERENCES users(telegram_id),
                     active INTEGER NOT NULL DEFAULT 1,
+                    initial_balance_cents INTEGER NOT NULL DEFAULT 0,
+                    target_role TEXT NOT NULL DEFAULT 'reseller',
+                    target_tier TEXT NOT NULL DEFAULT 'regular',
                     created_at TEXT NOT NULL
                 );
 
@@ -209,21 +238,31 @@ class Database:
                 con.execute("ALTER TABLE partner_accounts ADD COLUMN initial_balance_cents INTEGER NOT NULL DEFAULT 0")
             if "target_role" not in partner_columns:
                 con.execute("ALTER TABLE partner_accounts ADD COLUMN target_role TEXT NOT NULL DEFAULT 'reseller'")
+            if "target_tier" not in partner_columns:
+                con.execute("ALTER TABLE partner_accounts ADD COLUMN target_tier TEXT NOT NULL DEFAULT 'regular'")
+
+            user_columns = {row["name"] for row in con.execute("PRAGMA table_info(users)")}
+            if "tier" not in user_columns:
+                con.execute("ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'regular'")
+            if "language" not in user_columns:
+                con.execute("ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'es'")
 
     def create_partner(self, login: str, password: str, initial_balance_cents: int = 0,
-                       target_role: str = "reseller") -> None:
+                       target_role: str = "reseller", target_tier: str = "regular") -> None:
         login = login.strip()
         if len(login) < 3 or len(password) < 6:
             raise ValueError("Usuario mínimo 3 caracteres y contraseña mínimo 6")
         if target_role not in {"reseller", "admin"}:
             raise ValueError("Rol inválido")
+        if target_tier not in {"regular", "vip"}:
+            raise ValueError("Rango inválido")
         salt = os.urandom(16)
         digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 210_000)
         with self.transaction() as con:
             con.execute(
-                """INSERT INTO partner_accounts(login,password_hash,password_salt,initial_balance_cents,target_role,created_at)
-                   VALUES(?,?,?,?,?,?)""",
-                (login, digest.hex(), salt.hex(), initial_balance_cents, target_role, utcnow()),
+                """INSERT INTO partner_accounts(login,password_hash,password_salt,initial_balance_cents,
+                   target_role,target_tier,created_at) VALUES(?,?,?,?,?,?,?)""",
+                (login, digest.hex(), salt.hex(), initial_balance_cents, target_role, target_tier, utcnow()),
             )
 
     def activate_partner(self, login: str, password: str, telegram_id: int) -> bool:
@@ -240,9 +279,9 @@ class Database:
             con.execute("UPDATE partner_accounts SET telegram_id=? WHERE id=?", (telegram_id, row["id"]))
             if newly_bound:
                 con.execute(
-                    """UPDATE users SET role=?,requested_access=0,
+                    """UPDATE users SET role=?,tier=?,requested_access=0,
                        balance_cents=balance_cents+?,updated_at=? WHERE telegram_id=?""",
-                    (row["target_role"], row["initial_balance_cents"], utcnow(), telegram_id),
+                    (row["target_role"], row["target_tier"], row["initial_balance_cents"], utcnow(), telegram_id),
                 )
                 if row["initial_balance_cents"]:
                     balance = con.execute("SELECT balance_cents FROM users WHERE telegram_id=?", (telegram_id,)).fetchone()[0]
@@ -253,8 +292,8 @@ class Database:
                     )
             else:
                 con.execute(
-                    "UPDATE users SET role=?,requested_access=0,updated_at=? WHERE telegram_id=?",
-                    (row["target_role"], utcnow(), telegram_id),
+                    "UPDATE users SET role=?,tier=?,requested_access=0,updated_at=? WHERE telegram_id=?",
+                    (row["target_role"], row["target_tier"], utcnow(), telegram_id),
                 )
             return True
 
@@ -315,6 +354,26 @@ class Database:
     def user(self, telegram_id: int) -> sqlite3.Row | None:
         with self.connect() as con:
             return con.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,)).fetchone()
+
+    def set_language(self, telegram_id: int, language: str) -> bool:
+        if language not in {"es", "en"}:
+            raise ValueError("Idioma inválido")
+        with self.transaction() as con:
+            cur = con.execute(
+                "UPDATE users SET language=?,updated_at=? WHERE telegram_id=?",
+                (language, utcnow(), telegram_id),
+            )
+            return cur.rowcount == 1
+
+    def set_tier(self, telegram_id: int, tier: str) -> bool:
+        if tier not in {"regular", "vip"}:
+            raise ValueError("Rango inválido")
+        with self.transaction() as con:
+            cur = con.execute(
+                "UPDATE users SET tier=?,updated_at=? WHERE telegram_id=? AND role='reseller'",
+                (tier, utcnow(), telegram_id),
+            )
+            return cur.rowcount == 1
 
     def request_access(self, telegram_id: int) -> bool:
         with self.transaction() as con:
@@ -639,6 +698,17 @@ class Database:
                    WHERE o.user_id=? ORDER BY o.id DESC LIMIT ?""",
                 (user_id, limit),
             ).fetchall()
+
+    def user_key(self, user_id: int, secret_value: str) -> sqlite3.Row | None:
+        with self.connect() as con:
+            return con.execute(
+                """SELECT o.id,o.created_at,o.duration_days,o.expires_at,p.name,k.secret_value
+                   FROM orders o JOIN products p ON p.id=o.product_id
+                   JOIN inventory_keys k ON k.id=o.inventory_key_id
+                   WHERE o.user_id=? AND k.secret_value=? COLLATE NOCASE
+                   ORDER BY o.id DESC LIMIT 1""",
+                (user_id, secret_value.strip()),
+            ).fetchone()
 
     def history(self, user_id: int, limit: int = 10) -> list[sqlite3.Row]:
         with self.connect() as con:

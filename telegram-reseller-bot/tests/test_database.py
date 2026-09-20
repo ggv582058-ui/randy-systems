@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 
 from database import Database, InsufficientBalance, OutOfStock, ProductRestricted
@@ -101,6 +102,50 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(self.db.user(444)["balance_cents"], 2500)
         self.assertTrue(self.db.activate_partner("helperadmin", "secret123", 444))
         self.assertEqual(self.db.user(444)["balance_cents"], 2500)
+
+    def test_vip_partner_language_and_rank_persist(self):
+        self.db.ensure_user(555, "vip", "VIP", False)
+        self.db.create_partner("vipuser", "secret123", 500, "reseller", "vip")
+        self.assertTrue(self.db.activate_partner("vipuser", "secret123", 555))
+        self.assertEqual(self.db.user(555)["tier"], "vip")
+        self.assertTrue(self.db.set_language(555, "en"))
+        self.db.initialize()
+        self.assertEqual(self.db.user(555)["tier"], "vip")
+        self.assertEqual(self.db.user(555)["language"], "en")
+
+    def test_regular_can_lookup_only_own_purchased_key(self):
+        self.credit(1000)
+        self.db.add_keys(self.product, ["OWN-KEY"])
+        self.db.purchase(2, self.product)
+        self.assertEqual(self.db.user_key(2, "own-key")["secret_value"], "OWN-KEY")
+        self.assertIsNone(self.db.user_key(1, "OWN-KEY"))
+
+    def test_initialize_creates_backup_without_losing_data(self):
+        self.db.initialize()
+        backups = list((Path(self.tmp.name) / "backups").glob("test-*.db"))
+        self.assertTrue(backups)
+        self.assertEqual(self.db.product(self.product)["name"], "Test Product")
+
+    def test_legacy_users_are_migrated_without_deletion(self):
+        path = Path(self.tmp.name) / "legacy.db"
+        con = sqlite3.connect(path)
+        con.execute(
+            """CREATE TABLE users (telegram_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT NOT NULL,
+               role TEXT NOT NULL DEFAULT 'pending', balance_cents INTEGER NOT NULL DEFAULT 0,
+               requested_access INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"""
+        )
+        con.execute(
+            "INSERT INTO users VALUES(?,?,?,?,?,?,?,?)",
+            (99, "old", "Old User", "reseller", 1234, 0, "2026-01-01", "2026-01-01"),
+        )
+        con.commit()
+        con.close()
+        legacy = Database(path)
+        legacy.initialize()
+        user = legacy.user(99)
+        self.assertEqual(user["balance_cents"], 1234)
+        self.assertEqual(user["tier"], "regular")
+        self.assertEqual(user["language"], "es")
 
 
 if __name__ == "__main__":

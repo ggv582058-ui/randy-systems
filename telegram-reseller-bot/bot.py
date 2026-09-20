@@ -41,19 +41,70 @@ ADMIN_MENU = ReplyKeyboardMarkup(
      [KeyboardButton("➕ Crear socio"), KeyboardButton("👥 Revendedores")],
      [KeyboardButton("💳 Recargas"), KeyboardButton("📢 Anuncios")],
      [KeyboardButton("⚡ API Zentry"), KeyboardButton("🛡️ Control keys")],
-     [KeyboardButton("📊 Estadísticas")]],
+     [KeyboardButton("📊 Estadísticas"), KeyboardButton("🌐 Idioma / Language")]],
     resize_keyboard=True,
+)
+ADMIN_MENU_EN = ReplyKeyboardMarkup(
+    [[KeyboardButton("📦 Products"), KeyboardButton("🔑 Add keys")],
+     [KeyboardButton("📎 Files"), KeyboardButton("🎨 Media")],
+     [KeyboardButton("➕ Create partner"), KeyboardButton("👥 Resellers")],
+     [KeyboardButton("💳 Top-ups"), KeyboardButton("📢 Announcements")],
+     [KeyboardButton("⚡ Zentry API"), KeyboardButton("🛡️ Key control")],
+     [KeyboardButton("📊 Statistics"), KeyboardButton("🌐 Language / Idioma")]],
+    resize_keyboard=True,
+)
+VIP_ADMIN_MENU = ReplyKeyboardMarkup(
+    [[KeyboardButton("🛡️ Control keys")], [KeyboardButton("🌐 Idioma / Language")]], resize_keyboard=True
+)
+VIP_ADMIN_MENU_EN = ReplyKeyboardMarkup(
+    [[KeyboardButton("🛡️ Key control")], [KeyboardButton("🌐 Language / Idioma")]], resize_keyboard=True
 )
 USER_MENU = ReplyKeyboardMarkup(
     [[KeyboardButton("🛒 Comprar keys"), KeyboardButton("💳 Recargar saldo")],
-     [KeyboardButton("🔑 Mis keys"), KeyboardButton("👤 Mi cuenta")],
-     [KeyboardButton("🧾 Historial"), KeyboardButton("🆘 Soporte")],
+     [KeyboardButton("🔑 Mis keys"), KeyboardButton("🔍 Consultar key")],
+     [KeyboardButton("👤 Mi cuenta"), KeyboardButton("🧾 Historial")],
+     [KeyboardButton("🆘 Soporte"), KeyboardButton("🌐 Idioma / Language")],
     ],
     resize_keyboard=True,
 )
-PENDING_MENU = ReplyKeyboardMarkup(
-    [[KeyboardButton("🔐 Iniciar sesión"), KeyboardButton("📨 Solicitar acceso")]], resize_keyboard=True
+USER_MENU_EN = ReplyKeyboardMarkup(
+    [[KeyboardButton("🛒 Buy keys"), KeyboardButton("💳 Add balance")],
+     [KeyboardButton("🔑 My keys"), KeyboardButton("🔍 Check key")],
+     [KeyboardButton("👤 My account"), KeyboardButton("🧾 History")],
+     [KeyboardButton("🆘 Support"), KeyboardButton("🌐 Language / Idioma")]],
+    resize_keyboard=True,
 )
+PENDING_MENU = ReplyKeyboardMarkup(
+    [[KeyboardButton("🔐 Iniciar sesión"), KeyboardButton("📨 Solicitar acceso")],
+     [KeyboardButton("🌐 Idioma / Language")]], resize_keyboard=True
+)
+PENDING_MENU_EN = ReplyKeyboardMarkup(
+    [[KeyboardButton("🔐 Sign in"), KeyboardButton("📨 Request access")],
+     [KeyboardButton("🌐 Language / Idioma")]], resize_keyboard=True
+)
+
+
+def language_of(user) -> str:
+    return user["language"] if user and user["language"] in ("es", "en") else "es"
+
+
+def is_vip_row(user) -> bool:
+    return bool(user and user["role"] == "reseller" and user["tier"] == "vip")
+
+
+def user_menu(language: str):
+    return USER_MENU_EN if language == "en" else USER_MENU
+
+
+def pending_menu(language: str):
+    return PENDING_MENU_EN if language == "en" else PENDING_MENU
+
+
+def admin_menu(user):
+    language = language_of(user)
+    if user["role"] == "admin":
+        return ADMIN_MENU_EN if language == "en" else ADMIN_MENU
+    return VIP_ADMIN_MENU_EN if language == "en" else VIP_ADMIN_MENU
 
 
 def money(cents: int) -> str:
@@ -123,6 +174,11 @@ def is_admin(user_id: int) -> bool:
     return bool(row and row["role"] == "admin")
 
 
+def can_control_keys(user_id: int) -> bool:
+    row = db.user(user_id)
+    return bool(row and (row["role"] == "admin" or is_vip_row(row)))
+
+
 def panel(context: ContextTypes.DEFAULT_TYPE) -> str:
     return context.application.bot_data.get("panel", "reseller")
 
@@ -137,29 +193,48 @@ def admin_bot(context: ContextTypes.DEFAULT_TYPE):
 
 async def send_home(update: Update, context: ContextTypes.DEFAULT_TYPE, note: str | None = None) -> None:
     user = current_user(update)
+    language = language_of(user)
     chat = update.effective_chat
     if panel(context) == "admin":
-        if not is_admin(update.effective_user.id):
-            await chat.send_message("⛔ Este bot es privado y exclusivo para el administrador.")
+        if not can_control_keys(update.effective_user.id):
+            await chat.send_message("⛔ This bot is private." if language == "en" else "⛔ Este bot es privado.")
             return
-        text = note or (
-            f"🛡️ <b>{html.escape(settings.store_name)}</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "⚙️ <b>CENTRO DE ADMINISTRACIÓN</b>\n"
-            "Administra productos, socios, saldos y anuncios."
-        )
-        await chat.send_message(text, reply_markup=ADMIN_MENU, parse_mode=ParseMode.HTML)
+        if note:
+            text = note
+        elif user["role"] == "admin":
+            text = (f"🛡️ <b>{html.escape(settings.store_name)}</b>\n━━━━━━━━━━━━━━━━━━\n"
+                    + ("⚙️ <b>ADMINISTRATION CENTER</b>\nManage products, partners, balances and announcements."
+                       if language == "en" else
+                       "⚙️ <b>CENTRO DE ADMINISTRACIÓN</b>\nAdministra productos, socios, saldos y anuncios."))
+        else:
+            text = (f"💎 <b>{html.escape(settings.store_name)} · VIP</b>\n━━━━━━━━━━━━━━━━━━\n"
+                    + ("Limited license controls: check, reset, ban and unban."
+                       if language == "en" else
+                       "Control limitado de licencias: consultar, resetear, bloquear y desbloquear."))
+        await chat.send_message(text, reply_markup=admin_menu(user), parse_mode=ParseMode.HTML)
     elif user["role"] in ("reseller", "admin"):
-        text = note or (
-            f"💎 <b>{html.escape(settings.store_name)}</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            f"👤 Socio verificado\n💰 Saldo disponible: <b>{money(user['balance_cents'])}</b>\n"
-            "Selecciona una opción del menú."
-        )
-        await chat.send_message(text, reply_markup=USER_MENU, parse_mode=ParseMode.HTML)
+        rank = "Admin" if user["role"] == "admin" else ("VIP Partner" if is_vip_row(user) and language == "en" else ("Socio VIP" if is_vip_row(user) else ("Regular Partner" if language == "en" else "Socio Regular")))
+        text = note or (f"💎 <b>{html.escape(settings.store_name)}</b>\n━━━━━━━━━━━━━━━━━━\n"
+                        + (f"👤 Verified: <b>{rank}</b>\n💰 Available balance: <b>{money(user['balance_cents'])}</b>\nChoose an option."
+                           if language == "en" else
+                           f"👤 Rango: <b>{rank}</b>\n💰 Saldo disponible: <b>{money(user['balance_cents'])}</b>\nSelecciona una opción."))
+        await chat.send_message(text, reply_markup=user_menu(language), parse_mode=ParseMode.HTML)
     else:
-        label = "Tu solicitud está esperando revisión." if user["requested_access"] else "Solicita acceso para entrar como revendedor."
-        await chat.send_message(f"🔒 <b>Acceso restringido</b>\n{label}", reply_markup=PENDING_MENU, parse_mode=ParseMode.HTML)
+        if language == "en":
+            label = "Your request is waiting for review." if user["requested_access"] else "Request access to become a reseller."
+            text = f"🔒 <b>Restricted access</b>\n{label}"
+        else:
+            label = "Tu solicitud está esperando revisión." if user["requested_access"] else "Solicita acceso para entrar como revendedor."
+            text = f"🔒 <b>Acceso restringido</b>\n{label}"
+        await chat.send_message(text, reply_markup=pending_menu(language), parse_mode=ParseMode.HTML)
+
+
+async def choose_language(update: Update) -> None:
+    keys = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🇲🇽 Español", callback_data="lang:es"),
+        InlineKeyboardButton("🇺🇸 English", callback_data="lang:en"),
+    ]])
+    await update.effective_message.reply_text("🌐 Selecciona tu idioma / Choose your language", reply_markup=keys)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -262,12 +337,15 @@ async def show_partner_manager(message, target: int) -> None:
          InlineKeyboardButton("➖ Quitar saldo", callback_data=f"partner:subtract:{target}")],
         [InlineKeyboardButton("💲 Precio especial", callback_data=f"partner:prices:{target}")],
         [InlineKeyboardButton("🔐 Límites de compra", callback_data=f"partner:limits:{target}")],
+        [InlineKeyboardButton("💎 Hacer VIP", callback_data=f"partner:tier-vip:{target}"),
+         InlineKeyboardButton("👤 Hacer Regular", callback_data=f"partner:tier-regular:{target}")],
         [InlineKeyboardButton("⚠️ Enviar advertencia", callback_data=f"partner:warn:{target}")],
         [InlineKeyboardButton("🚫 Revocar acceso", callback_data=f"user:revoke:{target}")],
     ])
     await message.reply_text(
         f"⚙️ <b>Administrar socio</b>\nNombre: {html.escape(tag)}\n"
         f"Usuario de acceso: <code>{html.escape(login)}</code>\nID: <code>{target}</code>\n"
+        f"Rango: <b>{'VIP' if partner['tier'] == 'vip' else 'Regular'}</b>\n"
         f"Saldo: <b>{money(partner['balance_cents'])}</b>",
         reply_markup=keys,
         parse_mode=ParseMode.HTML,
@@ -304,19 +382,24 @@ async def show_topups(update: Update) -> None:
 
 async def show_account(update: Update) -> None:
     u = current_user(update)
+    language = language_of(u)
     tag = f"@{u['username']}" if u["username"] else "Sin username"
+    rank = "Admin" if u["role"] == "admin" else ("VIP" if is_vip_row(u) else "Regular")
     await update.effective_message.reply_text(
-        f"👤 <b>Mi cuenta</b>\nID: <code>{u['telegram_id']}</code>\nUsuario: {html.escape(tag)}\nRol: {u['role']}\nSaldo: <b>{money(u['balance_cents'])}</b>",
+        (f"👤 <b>My account</b>\nID: <code>{u['telegram_id']}</code>\nUser: {html.escape(tag)}\nRank: <b>{rank}</b>\nBalance: <b>{money(u['balance_cents'])}</b>"
+         if language == "en" else
+         f"👤 <b>Mi cuenta</b>\nID: <code>{u['telegram_id']}</code>\nUsuario: {html.escape(tag)}\nRango: <b>{rank}</b>\nSaldo: <b>{money(u['balance_cents'])}</b>"),
         parse_mode=ParseMode.HTML,
     )
 
 
 async def show_history(update: Update) -> None:
+    language = language_of(current_user(update))
     rows = db.history(update.effective_user.id)
     if not rows:
-        await update.effective_message.reply_text("🧾 Todavía no tienes movimientos.")
+        await update.effective_message.reply_text("🧾 You do not have any transactions yet." if language == "en" else "🧾 Todavía no tienes movimientos.")
         return
-    lines = ["🧾 <b>Últimos movimientos</b>"]
+    lines = ["🧾 <b>Recent transactions</b>" if language == "en" else "🧾 <b>Últimos movimientos</b>"]
     for row in rows:
         sign = "+" if row["amount_cents"] > 0 else ""
         lines.append(f"• {row['kind']} · {sign}{money(row['amount_cents'])} · Saldo {money(row['balance_after_cents'])}")
@@ -324,28 +407,51 @@ async def show_history(update: Update) -> None:
 
 
 async def show_my_keys(update: Update) -> None:
+    language = language_of(current_user(update))
     rows = db.user_keys(update.effective_user.id)
     if not rows:
-        await update.effective_message.reply_text("🔑 <b>Mis keys</b>\nTodavía no has comprado ninguna key.", parse_mode=ParseMode.HTML)
+        text = "🔑 <b>My keys</b>\nYou have not purchased any keys yet." if language == "en" else "🔑 <b>Mis keys</b>\nTodavía no has comprado ninguna key."
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
         return
     for row in rows:
-        if not row["expires_at"]:
-            status, active = "Sin seguimiento (compra antigua)", False
-        else:
-            status, active = remaining_time(row["expires_at"])
-        icon = "🟢" if active else "🔴"
-        await update.effective_message.reply_text(
-            "🔐 <b>LICENCIA DIGITAL</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            f"📦 Producto: <b>{html.escape(row['name'])}</b>\n"
-            f"🔑 Key: <code>{html.escape(row['secret_value'])}</code>\n"
-            f"🧾 Referencia: <code>#{row['id']}</code>\n"
-            f"📅 Compra: {format_date(row['created_at'])}\n"
-            f"⏳ Duración: {row['duration_days'] or '?'} días\n"
-            f"{icon} Tiempo restante: <b>{status}</b>" +
-            (f"\n⌛ Vence: {format_date(row['expires_at'])}" if row["expires_at"] else ""),
-            parse_mode=ParseMode.HTML,
-        )
+        await send_key_status(update.effective_message, row, language)
+
+
+async def send_key_status(message, row, language: str) -> None:
+    if not row["expires_at"]:
+        status, active = ("No tracking (old purchase)" if language == "en" else "Sin seguimiento (compra antigua)"), False
+    else:
+        status, active = remaining_time(row["expires_at"])
+    icon = "🟢" if active else "🔴"
+    if language == "en":
+        text = ("🔐 <b>DIGITAL LICENSE</b>\n━━━━━━━━━━━━━━━━━━\n"
+                f"📦 Product: <b>{html.escape(row['name'])}</b>\n"
+                f"🔑 Key: <code>{html.escape(row['secret_value'])}</code>\n"
+                f"🧾 Reference: <code>#{row['id']}</code>\n"
+                f"📅 Purchase date: {format_date(row['created_at'])}\n"
+                f"⏳ Duration: {row['duration_days'] or '?'} days\n"
+                f"{icon} Time remaining: <b>{status}</b>"
+                + (f"\n⌛ Expires: {format_date(row['expires_at'])}" if row["expires_at"] else ""))
+    else:
+        text = ("🔐 <b>LICENCIA DIGITAL</b>\n━━━━━━━━━━━━━━━━━━\n"
+                f"📦 Producto: <b>{html.escape(row['name'])}</b>\n"
+                f"🔑 Key: <code>{html.escape(row['secret_value'])}</code>\n"
+                f"🧾 Referencia: <code>#{row['id']}</code>\n"
+                f"📅 Fecha de compra: {format_date(row['created_at'])}\n"
+                f"⏳ Duración: {row['duration_days'] or '?'} días\n"
+                f"{icon} Tiempo restante: <b>{status}</b>"
+                + (f"\n⌛ Vence: {format_date(row['expires_at'])}" if row["expires_at"] else ""))
+    await message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def begin_key_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    language = language_of(current_user(update))
+    context.user_data["flow"] = {"name": "lookup_own_key"}
+    await update.effective_message.reply_text(
+        "🔍 Send the key to view its purchase date, history and time remaining."
+        if language == "en" else
+        "🔍 Escribe la key para ver su fecha de compra, historial y tiempo restante."
+    )
 
 
 async def show_stats(update: Update) -> None:
@@ -403,20 +509,75 @@ async def begin_zentry_control(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.effective_message.reply_text("🛡️ Envía la key que deseas consultar o administrar:")
 
 
+async def run_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str) -> None:
+    user = current_user(update)
+    language = language_of(user)
+    if not can_control_keys(user["telegram_id"]):
+        await update.effective_message.reply_text(
+            "⛔ Only Admin or VIP partners can use this command."
+            if language == "en" else "⛔ Este comando es solo para Admin o Socio VIP."
+        )
+        return
+    if not context.args:
+        await update.effective_message.reply_text(f"Uso: /{action} KEY")
+        return
+    license_key = context.args[0].strip()
+    operations = {
+        "reset": zentry.reset_hwid,
+        "bankey": zentry.ban_license,
+        "unbankey": zentry.unban_license,
+        "keyinfo": zentry.license_info,
+    }
+    try:
+        result = await asyncio.to_thread(operations[action], license_key)
+    except ZentryError as exc:
+        await update.effective_message.reply_text(f"❌ {html.escape(str(exc))}", parse_mode=ParseMode.HTML)
+        return
+    if action == "keyinfo":
+        data_result = result.get("data", result)
+        pretty = json.dumps(data_result, ensure_ascii=False, indent=2, default=str)[:3500]
+        await update.effective_message.reply_text(
+            f"🔎 <b>{'License status' if language == 'en' else 'Estado de la licencia'}</b>\n"
+            f"<pre>{html.escape(pretty)}</pre>", parse_mode=ParseMode.HTML,
+        )
+    else:
+        label = {"reset": "Reset HWID", "bankey": "Key bloqueada", "unbankey": "Key desbloqueada"}[action]
+        await update.effective_message.reply_text(f"✅ {label}")
+
+
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await run_key_command(update, context, "reset")
+
+
+async def ban_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await run_key_command(update, context, "bankey")
+
+
+async def unban_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await run_key_command(update, context, "unbankey")
+
+
+async def key_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await run_key_command(update, context, "keyinfo")
+
+
 async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = current_user(update)
     text = (update.effective_message.text or "").strip()
     admin_panel = panel(context) == "admin"
-    if admin_panel and not is_admin(update.effective_user.id):
-        await update.effective_message.reply_text("⛔ Este bot es privado y exclusivo para el administrador.")
+    if admin_panel and not can_control_keys(update.effective_user.id):
+        await update.effective_message.reply_text("⛔ Este bot es privado.")
         return
-    if text == "📨 Solicitar acceso":
+    if text == "🌐 Idioma / Language":
+        await choose_language(update)
+        return
+    if text in ("📨 Solicitar acceso", "📨 Request access"):
         if admin_panel:
             await send_home(update, context)
             return
         await access_request(update, context)
         return
-    if not admin_panel and text == "🔐 Iniciar sesión":
+    if not admin_panel and text in ("🔐 Iniciar sesión", "🔐 Sign in"):
         context.user_data["flow"] = {"name": "partner_login"}
         await update.effective_message.reply_text("👤 Escribe el usuario que te dio el Admin:")
         return
@@ -426,41 +587,44 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await send_home(update, context)
         return
 
-    if not admin_panel and text == "🛒 Comprar keys":
+    if not admin_panel and text in ("🛒 Comprar keys", "🛒 Buy keys"):
         await show_buy(update)
-    elif not admin_panel and text == "💳 Recargar saldo":
+    elif not admin_panel and text in ("💳 Recargar saldo", "💳 Add balance"):
         await begin_topup(update, context)
-    elif not admin_panel and text == "🔑 Mis keys":
+    elif not admin_panel and text in ("🔑 Mis keys", "🔑 My keys"):
         await show_my_keys(update)
-    elif not admin_panel and text == "👤 Mi cuenta":
+    elif not admin_panel and text in ("🔍 Consultar key", "🔍 Check key"):
+        await begin_key_lookup(update, context)
+    elif not admin_panel and text in ("👤 Mi cuenta", "👤 My account"):
         await show_account(update)
-    elif not admin_panel and text == "🧾 Historial":
+    elif not admin_panel and text in ("🧾 Historial", "🧾 History"):
         await show_history(update)
-    elif not admin_panel and text == "🆘 Soporte":
-        await update.effective_message.reply_text(f"🆘 Soporte: {settings.support_username}")
-    elif admin_panel and user["role"] == "admin" and text == "📦 Productos":
-        await show_products_admin(update)
-    elif admin_panel and user["role"] == "admin" and text == "🔑 Añadir keys":
-        await begin_add_keys(update)
-    elif admin_panel and user["role"] == "admin" and text == "📎 Archivos":
-        await begin_product_file(update)
-    elif admin_panel and user["role"] == "admin" and text == "🎨 Multimedia":
-        await begin_product_media(update)
-    elif admin_panel and user["role"] == "admin" and text == "⚡ API Zentry":
-        await begin_zentry_generate(update)
-    elif admin_panel and user["role"] == "admin" and text == "🛡️ Control keys":
+    elif not admin_panel and text in ("🆘 Soporte", "🆘 Support"):
+        label = "Support" if language_of(user) == "en" else "Soporte"
+        await update.effective_message.reply_text(f"🆘 {label}: {settings.support_username}")
+    elif admin_panel and can_control_keys(user["telegram_id"]) and text in ("🛡️ Control keys", "🛡️ Key control"):
         await begin_zentry_control(update, context)
-    elif admin_panel and user["role"] == "admin" and text == "➕ Crear socio":
+    elif admin_panel and user["role"] == "admin" and text in ("📦 Productos", "📦 Products"):
+        await show_products_admin(update)
+    elif admin_panel and user["role"] == "admin" and text in ("🔑 Añadir keys", "🔑 Add keys"):
+        await begin_add_keys(update)
+    elif admin_panel and user["role"] == "admin" and text in ("📎 Archivos", "📎 Files"):
+        await begin_product_file(update)
+    elif admin_panel and user["role"] == "admin" and text in ("🎨 Multimedia", "🎨 Media"):
+        await begin_product_media(update)
+    elif admin_panel and user["role"] == "admin" and text in ("⚡ API Zentry", "⚡ Zentry API"):
+        await begin_zentry_generate(update)
+    elif admin_panel and user["role"] == "admin" and text in ("➕ Crear socio", "➕ Create partner"):
         context.user_data["flow"] = {"name": "partner_create_login"}
         await update.effective_message.reply_text("👤 Escribe el usuario para el socio:")
-    elif admin_panel and user["role"] == "admin" and text == "📢 Anuncios":
+    elif admin_panel and user["role"] == "admin" and text in ("📢 Anuncios", "📢 Announcements"):
         context.user_data["flow"] = {"name": "broadcast"}
         await update.effective_message.reply_text("📢 Envía el mensaje, foto o archivo que recibirán todos los socios.")
-    elif admin_panel and user["role"] == "admin" and text == "👥 Revendedores":
+    elif admin_panel and user["role"] == "admin" and text in ("👥 Revendedores", "👥 Resellers"):
         await show_resellers(update)
-    elif admin_panel and user["role"] == "admin" and text == "💳 Recargas":
+    elif admin_panel and user["role"] == "admin" and text in ("💳 Recargas", "💳 Top-ups"):
         await show_topups(update)
-    elif admin_panel and user["role"] == "admin" and text == "📊 Estadísticas":
+    elif admin_panel and user["role"] == "admin" and text in ("📊 Estadísticas", "📊 Statistics"):
         await show_stats(update)
     elif admin_panel and user["role"] == "admin" and text == "👤 Vista revendedor":
         await update.effective_message.reply_text("La vista del revendedor está en el bot de ventas.")
@@ -478,6 +642,29 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if flow["name"] == "partner_login":
         flow["name"], flow["login"] = "partner_password", text
         await message.reply_text("🔑 Escribe tu contraseña:")
+        return True
+
+    if flow["name"] == "lookup_own_key":
+        language = language_of(current_user(update))
+        if len(text) < 4 or len(text) > 200:
+            await message.reply_text("❌ Invalid key." if language == "en" else "❌ La key no parece válida.")
+            return True
+        row = db.user_key(message.from_user.id, text)
+        context.user_data.pop("flow", None)
+        if row:
+            await send_key_status(message, row, language)
+            return True
+        if zentry.configured:
+            try:
+                result = await asyncio.to_thread(zentry.license_info, text)
+                data_result = result.get("data", result)
+                pretty = json.dumps(data_result, ensure_ascii=False, indent=2, default=str)[:3000]
+                title = "🔎 <b>License status</b>" if language == "en" else "🔎 <b>Estado de la licencia</b>"
+                await message.reply_text(f"{title}\n<pre>{html.escape(pretty)}</pre>", parse_mode=ParseMode.HTML)
+            except ZentryError:
+                await message.reply_text("❌ Key not found in your history." if language == "en" else "❌ La key no aparece en tu historial.")
+        else:
+            await message.reply_text("❌ Key not found in your history." if language == "en" else "❌ La key no aparece en tu historial.")
         return True
 
     if flow["name"] == "zentry_generate_quantity":
@@ -552,16 +739,20 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             await message.reply_text("❌ La contraseña debe tener mínimo 6 caracteres.")
             return True
         flow["name"], flow["password"] = "partner_create_role", text
-        keys = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🛡️ Administrador", callback_data="newrole:admin"),
-            InlineKeyboardButton("🛒 Socio comprador", callback_data="newrole:reseller"),
-        ]])
+        keys = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛡️ Administrador", callback_data="newrole:admin")],
+            [InlineKeyboardButton("💎 Socio VIP", callback_data="newrole:vip"),
+             InlineKeyboardButton("👤 Socio Regular", callback_data="newrole:regular")],
+        ])
         await message.reply_text("👤 <b>Elige el rol de la nueva cuenta:</b>", reply_markup=keys, parse_mode=ParseMode.HTML)
         return True
     if flow["name"] == "partner_create_balance":
         try:
             initial_balance = 0 if text in ("0", "0.00", "$0") else parse_amount(text)
-            db.create_partner(flow["login"], flow["password"], initial_balance, flow["target_role"])
+            db.create_partner(
+                flow["login"], flow["password"], initial_balance,
+                flow["target_role"], flow.get("target_tier", "regular"),
+            )
         except (ValueError, sqlite3.IntegrityError) as exc:
             await message.reply_text(f"❌ {exc}")
             return True
@@ -572,7 +763,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             "✅ <b>Socio creado</b>\n━━━━━━━━━━━━━━━━━━\n"
             f"Usuario: <code>{html.escape(login)}</code>\n"
             f"Contraseña: <code>{html.escape(password)}</code>\n"
-            f"Rol: <b>{'Administrador' if flow['target_role'] == 'admin' else 'Socio comprador'}</b>\n"
+            f"Rango: <b>{'Administrador' if flow['target_role'] == 'admin' else ('Socio VIP' if flow.get('target_tier') == 'vip' else 'Socio Regular')}</b>\n"
             f"Saldo al vincularse: <b>{money(initial_balance)}</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=ADMIN_MENU,
@@ -864,6 +1055,14 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.answer()
         return
 
+    if data.startswith("lang:"):
+        language = data.split(":", 1)[1]
+        db.set_language(query.from_user.id, language)
+        await query.answer("Language saved" if language == "en" else "Idioma guardado")
+        await query.edit_message_reply_markup(reply_markup=None)
+        await send_home(update, context)
+        return
+
     if data.startswith("newrole:"):
         if not admin_panel or not is_admin(query.from_user.id):
             await query.answer("Solo Admin", show_alert=True)
@@ -872,11 +1071,13 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not flow or flow.get("name") != "partner_create_role":
             await query.answer("Esta creación ya terminó", show_alert=True)
             return
-        role = data.split(":", 1)[1]
-        if role not in ("admin", "reseller"):
+        selected = data.split(":", 1)[1]
+        if selected not in ("admin", "vip", "regular"):
             await query.answer("Rol inválido", show_alert=True)
             return
-        flow["name"], flow["target_role"] = "partner_create_balance", role
+        flow["name"] = "partner_create_balance"
+        flow["target_role"] = "admin" if selected == "admin" else "reseller"
+        flow["target_tier"] = "vip" if selected == "vip" else "regular"
         await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
@@ -903,6 +1104,17 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 f"💰 Escribe cuánto quieres {'agregar' if action == 'add' else 'quitar'}. Ejemplo: <code>25.00</code>",
                 parse_mode=ParseMode.HTML,
             )
+        elif action in ("tier-vip", "tier-regular"):
+            tier = "vip" if action == "tier-vip" else "regular"
+            changed = db.set_tier(target, tier)
+            await query.answer("Rango actualizado" if changed else "Socio no encontrado", show_alert=True)
+            if changed:
+                await query.message.reply_text(f"✅ El socio ahora tiene rango <b>{tier.upper()}</b>.", parse_mode=ParseMode.HTML)
+                try:
+                    await reseller_bot(context).send_message(target, f"💎 Tu rango cambió a {tier.upper()}.")
+                except Exception:
+                    pass
+            return
         elif action == "warn":
             await query.answer()
             context.user_data["flow"] = {"name": "partner_warning", "target": target}
@@ -1070,8 +1282,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if data.startswith("zentryctl:"):
-        if not admin_panel or not is_admin(query.from_user.id):
-            await query.answer("Solo Admin", show_alert=True)
+        if not admin_panel or not can_control_keys(query.from_user.id):
+            await query.answer("Solo Admin o Socio VIP", show_alert=True)
             return
         license_key = context.user_data.get("zentry_control_key")
         if not license_key:
@@ -1269,6 +1481,10 @@ def build_application(token: str, panel_name: str) -> Application:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))
     app.add_handler(CommandHandler("cancel", cancel))
+    app.add_handler(CommandHandler("reset", reset_command))
+    app.add_handler(CommandHandler("bankey", ban_key_command))
+    app.add_handler(CommandHandler("unbankey", unban_key_command))
+    app.add_handler(CommandHandler("keyinfo", key_info_command))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_menu))
     app.add_error_handler(error_handler)
