@@ -549,7 +549,7 @@ async def deliver_certificate(bot, order) -> None:
         )
 
 
-async def submit_certificate_order(message, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def submit_certificate_order(message, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
     flow = context.user_data.get("certificate_pending")
     if not flow:
         await message.reply_text("La solicitud expiró. Pulsa 🔑 Use Key para comenzar de nuevo.")
@@ -558,7 +558,7 @@ async def submit_certificate_order(message, context: ContextTypes.DEFAULT_TYPE) 
     expires = (datetime.now(timezone.utc) + timedelta(hours=settings.certificate_link_ttl_hours)).isoformat(timespec="seconds")
     try:
         local = db.create_certificate_order(
-            message.from_user.id, flow["certificate_key"], settings.chungchi_plan_id,
+            user_id, flow["certificate_key"], settings.chungchi_plan_id,
             flow["udid"], flow["device"], flow["p12_password"], flow["display_name"],
             install_token, expires,
         )
@@ -1405,7 +1405,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         await query.answer("Creando pedido…")
         await query.edit_message_reply_markup(reply_markup=None)
-        await submit_certificate_order(query.message, context)
+        await submit_certificate_order(query.message, context, query.from_user.id)
         return
 
     if data.startswith("newrole:"):
