@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from database import Database, InsufficientBalance, OutOfStock, ProductRestricted
@@ -146,6 +147,38 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(user["balance_cents"], 1234)
         self.assertEqual(user["tier"], "regular")
         self.assertEqual(user["language"], "es")
+
+    def test_certificate_key_charge_and_completion_are_atomic(self):
+        self.credit(1000)
+        issued = self.db.buy_certificate_key(2, "CERT-AAAA-BBBB-CCCC", 350)
+        self.assertEqual(issued["balance_cents"], 650)
+        expires = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+        order = self.db.create_certificate_order(
+            2, issued["key_code"], 23, "00008110-001C0CAE2101801E", "iphone",
+            "1", "Randy Test", "private-token", expires,
+        )
+        self.assertEqual(self.db.certificate_key(2, issued["key_code"])["status"], "processing")
+        order = self.db.attach_provider_order(order["id"], {
+            "order_code": "6XB32G", "status": "pending", "amount": 2.04,
+        })
+        completed = self.db.update_certificate_order("6XB32G", {
+            "order_code": "6XB32G", "status": "completed",
+            "download_url": "https://chungchi.store/storage/cert.zip",
+        })
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(self.db.certificate_key(2, issued["key_code"])["status"], "used")
+
+    def test_failed_certificate_order_releases_key_without_refunding_purchase(self):
+        self.credit(1000)
+        issued = self.db.buy_certificate_key(2, "CERT-DDDD-EEEE-FFFF", 350)
+        expires = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+        order = self.db.create_certificate_order(
+            2, issued["key_code"], 23, "00008110-001C0CAE2101801E", "iphone",
+            "1", "Retry", "retry-token", expires,
+        )
+        self.db.mark_certificate_error(order["id"], "invalid request", True)
+        self.assertEqual(self.db.certificate_key(2, issued["key_code"])["status"], "available")
+        self.assertEqual(self.db.user(2)["balance_cents"], 650)
 
 
 if __name__ == "__main__":

@@ -208,6 +208,50 @@ class Database:
                     sticker_name TEXT,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS certificate_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key_code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    user_id INTEGER NOT NULL REFERENCES users(telegram_id),
+                    price_cents INTEGER NOT NULL CHECK(price_cents > 0),
+                    status TEXT NOT NULL DEFAULT 'available'
+                        CHECK(status IN ('available','processing','used','refunded')),
+                    created_at TEXT NOT NULL,
+                    redeemed_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS certificate_orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    certificate_key_id INTEGER NOT NULL UNIQUE REFERENCES certificate_keys(id),
+                    user_id INTEGER NOT NULL REFERENCES users(telegram_id),
+                    plan_id INTEGER NOT NULL,
+                    udid TEXT NOT NULL,
+                    device TEXT NOT NULL CHECK(device IN ('iphone','ipad')),
+                    p12_password TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'submitting',
+                    provider_order_code TEXT UNIQUE,
+                    provider_amount_cents INTEGER,
+                    download_url TEXT,
+                    install_token TEXT NOT NULL UNIQUE,
+                    install_expires_at TEXT NOT NULL,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    delivered_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS private_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_certificate_orders_user
+                    ON certificate_orders(user_id, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_certificate_orders_status
+                    ON certificate_orders(status, updated_at);
                 """
             )
 
@@ -715,6 +759,188 @@ class Database:
             return con.execute(
                 "SELECT * FROM ledger WHERE user_id=? ORDER BY id DESC LIMIT ?", (user_id, limit)
             ).fetchall()
+
+    def buy_certificate_key(self, user_id: int, key_code: str, price_cents: int) -> dict:
+        """Charge the internal wallet and issue a single-use certificate key."""
+        with self.transaction() as con:
+            user = con.execute("SELECT * FROM users WHERE telegram_id=?", (user_id,)).fetchone()
+            if not user or user["role"] not in ("reseller", "admin"):
+                raise NotApproved("Tu cuenta no está aprobada")
+            if user["balance_cents"] < price_cents:
+                raise InsufficientBalance("Saldo insuficiente")
+            now = utcnow()
+            balance = user["balance_cents"] - price_cents
+            con.execute(
+                "UPDATE users SET balance_cents=?,updated_at=? WHERE telegram_id=?",
+                (balance, now, user_id),
+            )
+            cur = con.execute(
+                "INSERT INTO certificate_keys(key_code,user_id,price_cents,created_at) VALUES(?,?,?,?)",
+                (key_code, user_id, price_cents, now),
+            )
+            key_id = int(cur.lastrowid)
+            con.execute(
+                "INSERT INTO ledger(user_id,kind,amount_cents,balance_after_cents,reference,created_at) VALUES(?,?,?,?,?,?)",
+                (user_id, "purchase", -price_cents, balance, f"certificate-key:{key_id}", now),
+            )
+            return {"id": key_id, "key_code": key_code, "balance_cents": balance, "price_cents": price_cents}
+
+    def certificate_key(self, user_id: int, key_code: str) -> sqlite3.Row | None:
+        with self.connect() as con:
+            return con.execute(
+                "SELECT * FROM certificate_keys WHERE user_id=? AND key_code=? COLLATE NOCASE",
+                (user_id, key_code.strip()),
+            ).fetchone()
+
+    def create_certificate_order(
+        self, user_id: int, key_code: str, plan_id: int, udid: str, device: str,
+        p12_password: str, display_name: str, install_token: str, install_expires_at: str,
+    ) -> sqlite3.Row:
+        with self.transaction() as con:
+            key = con.execute(
+                "SELECT * FROM certificate_keys WHERE user_id=? AND key_code=? COLLATE NOCASE",
+                (user_id, key_code.strip()),
+            ).fetchone()
+            if not key:
+                raise NotFound("Key de certificado no encontrada")
+            if key["status"] != "available":
+                raise StoreError("Esta key ya fue usada o está procesándose")
+            now = utcnow()
+            claimed = con.execute(
+                "UPDATE certificate_keys SET status='processing',redeemed_at=? WHERE id=? AND status='available'",
+                (now, key["id"]),
+            )
+            if claimed.rowcount != 1:
+                raise StoreError("Esta key ya fue utilizada")
+            cur = con.execute(
+                """INSERT INTO certificate_orders(
+                   certificate_key_id,user_id,plan_id,udid,device,p12_password,display_name,
+                   install_token,install_expires_at,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (key["id"], user_id, plan_id, udid, device, p12_password, display_name,
+                 install_token, install_expires_at, now, now),
+            )
+            return con.execute("SELECT * FROM certificate_orders WHERE id=?", (cur.lastrowid,)).fetchone()
+
+    def attach_provider_order(self, order_id: int, provider: dict) -> sqlite3.Row:
+        code = str(provider.get("order_code") or "").strip()
+        if not code:
+            raise ValueError("Falta order_code")
+        status = str(provider.get("status") or "pending").lower()
+        amount = provider.get("amount")
+        amount_cents = int(round(float(amount) * 100)) if amount is not None else None
+        with self.transaction() as con:
+            con.execute(
+                """UPDATE certificate_orders SET provider_order_code=?,provider_amount_cents=?,
+                   status=?,download_url=?,last_error='',updated_at=? WHERE id=?""",
+                (code, amount_cents, status, provider.get("download_url"), utcnow(), order_id),
+            )
+            if status == "completed":
+                con.execute(
+                    "UPDATE certificate_orders SET completed_at=COALESCE(completed_at,?) WHERE id=?",
+                    (utcnow(), order_id),
+                )
+                con.execute(
+                    """UPDATE certificate_keys SET status='used' WHERE id=(
+                       SELECT certificate_key_id FROM certificate_orders WHERE id=?)""", (order_id,),
+                )
+            return con.execute("SELECT * FROM certificate_orders WHERE id=?", (order_id,)).fetchone()
+
+    def update_certificate_order(self, provider_order_code: str, provider: dict) -> sqlite3.Row | None:
+        with self.transaction() as con:
+            row = con.execute(
+                "SELECT * FROM certificate_orders WHERE provider_order_code=?", (provider_order_code,)
+            ).fetchone()
+            if not row:
+                return None
+            status = str(provider.get("status") or row["status"]).lower()
+            completed_at = provider.get("completed_at") or (utcnow() if status == "completed" else row["completed_at"])
+            con.execute(
+                """UPDATE certificate_orders SET status=?,download_url=COALESCE(?,download_url),
+                   p12_password=COALESCE(?,p12_password),completed_at=?,last_error='',updated_at=? WHERE id=?""",
+                (status, provider.get("download_url"), provider.get("p12_password"), completed_at, utcnow(), row["id"]),
+            )
+            if status == "completed":
+                con.execute("UPDATE certificate_keys SET status='used' WHERE id=?", (row["certificate_key_id"],))
+            elif status in ("failed", "cancelled"):
+                con.execute("UPDATE certificate_keys SET status='available',redeemed_at=NULL WHERE id=?", (row["certificate_key_id"],))
+            return con.execute("SELECT * FROM certificate_orders WHERE id=?", (row["id"],)).fetchone()
+
+    def mark_certificate_error(self, order_id: int, error: str, release_key: bool) -> sqlite3.Row | None:
+        with self.transaction() as con:
+            row = con.execute("SELECT * FROM certificate_orders WHERE id=?", (order_id,)).fetchone()
+            if not row:
+                return None
+            status = "failed" if release_key else "review"
+            con.execute(
+                "UPDATE certificate_orders SET status=?,last_error=?,updated_at=? WHERE id=?",
+                (status, error[:500], utcnow(), order_id),
+            )
+            if release_key:
+                con.execute(
+                    "UPDATE certificate_keys SET status='available',redeemed_at=NULL WHERE id=?",
+                    (row["certificate_key_id"],),
+                )
+            return con.execute("SELECT * FROM certificate_orders WHERE id=?", (order_id,)).fetchone()
+
+    def certificate_order(self, order_id: int, user_id: int | None = None) -> sqlite3.Row | None:
+        with self.connect() as con:
+            if user_id is None:
+                return con.execute("SELECT * FROM certificate_orders WHERE id=?", (order_id,)).fetchone()
+            return con.execute(
+                "SELECT * FROM certificate_orders WHERE id=? AND user_id=?", (order_id, user_id)
+            ).fetchone()
+
+    def certificate_order_by_code(self, order_code: str) -> sqlite3.Row | None:
+        with self.connect() as con:
+            return con.execute(
+                "SELECT * FROM certificate_orders WHERE provider_order_code=?", (order_code,)
+            ).fetchone()
+
+    def certificate_orders_for_user(self, user_id: int, udid: str | None = None, limit: int = 10) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            if udid:
+                return con.execute(
+                    "SELECT * FROM certificate_orders WHERE user_id=? AND udid=? COLLATE NOCASE ORDER BY id DESC LIMIT ?",
+                    (user_id, udid.strip(), limit),
+                ).fetchall()
+            return con.execute(
+                "SELECT * FROM certificate_orders WHERE user_id=? ORDER BY id DESC LIMIT ?", (user_id, limit)
+            ).fetchall()
+
+    def pending_certificate_orders(self, limit: int = 50) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            return con.execute(
+                """SELECT * FROM certificate_orders
+                   WHERE provider_order_code IS NOT NULL AND status IN ('pending','processing','review','submitting')
+                   ORDER BY updated_at LIMIT ?""", (limit,)
+            ).fetchall()
+
+    def install_order(self, token: str) -> sqlite3.Row | None:
+        with self.connect() as con:
+            return con.execute(
+                "SELECT * FROM certificate_orders WHERE install_token=?", (token,)
+            ).fetchone()
+
+    def mark_certificate_delivered(self, order_id: int) -> None:
+        with self.transaction() as con:
+            con.execute(
+                "UPDATE certificate_orders SET delivered_at=COALESCE(delivered_at,?),updated_at=? WHERE id=?",
+                (utcnow(), utcnow(), order_id),
+            )
+
+    def private_setting(self, key: str) -> str:
+        with self.connect() as con:
+            row = con.execute("SELECT value FROM private_settings WHERE key=?", (key,)).fetchone()
+            return row["value"] if row else ""
+
+    def set_private_setting(self, key: str, value: str) -> None:
+        with self.transaction() as con:
+            con.execute(
+                """INSERT INTO private_settings(key,value,updated_at) VALUES(?,?,?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at""",
+                (key, value, utcnow()),
+            )
 
     def stats(self) -> dict[str, int]:
         with self.connect() as con:

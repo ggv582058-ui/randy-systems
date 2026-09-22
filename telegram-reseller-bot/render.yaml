@@ -23,6 +23,16 @@ services:
         sync: false
       - key: ZENTRY_KEY_PREFIX
         value: RANDY
+      - key: CHUNGCHI_API_KEY
+        sync: false
+      - key: CHUNGCHI_BASE_URL
+        value: https://chungchi.store
+      - key: CHUNGCHI_PLAN_ID
+        value: "23"
+      - key: CHUNGCHI_SELL_PRICE_CENTS
+        value: "350"
+      - key: CERTIFICATE_LINK_TTL_HOURS
+        value: "24"
       - key: ADMIN_IDS
         value: "7883560984"
       - key: STORE_NAME

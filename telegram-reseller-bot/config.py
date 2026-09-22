@@ -33,6 +33,12 @@ class Settings:
     zentry_seller_key: str
     zentry_seller_secret: str
     zentry_key_prefix: str
+    chungchi_base_url: str
+    chungchi_api_key: str
+    chungchi_plan_id: int
+    chungchi_sell_price_cents: int
+    chungchi_webhook_secret: str
+    certificate_link_ttl_hours: int
 
 
 def load_settings() -> Settings:
@@ -67,4 +73,10 @@ def load_settings() -> Settings:
         zentry_seller_key=_compact_secret(os.getenv("ZENTRY_SELLER_KEY", "")),
         zentry_seller_secret=_compact_secret(os.getenv("ZENTRY_SELLER_SECRET", "")),
         zentry_key_prefix=os.getenv("ZENTRY_KEY_PREFIX", "RANDY").strip() or "RANDY",
+        chungchi_base_url=os.getenv("CHUNGCHI_BASE_URL", "https://chungchi.store").strip().rstrip("/"),
+        chungchi_api_key=_compact_secret(os.getenv("CHUNGCHI_API_KEY", "")),
+        chungchi_plan_id=int(os.getenv("CHUNGCHI_PLAN_ID", "23")),
+        chungchi_sell_price_cents=int(os.getenv("CHUNGCHI_SELL_PRICE_CENTS", "350")),
+        chungchi_webhook_secret=_compact_secret(os.getenv("CHUNGCHI_WEBHOOK_SECRET", "")),
+        certificate_link_ttl_hours=max(1, int(os.getenv("CERTIFICATE_LINK_TTL_HOURS", "24"))),
     )

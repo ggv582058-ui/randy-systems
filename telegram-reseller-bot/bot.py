@@ -7,10 +7,12 @@ import io
 import json
 import logging
 import os
+import re
+import secrets
 import signal
 import sqlite3
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
@@ -18,6 +20,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from config import load_settings
+from chungchi_api import ChungChiClient, ChungChiError
 from database import Database, InsufficientBalance, NotApproved, NotFound, OutOfStock, ProductRestricted, StoreError
 from health import start_health_server
 from zentry_api import ZentryClient, ZentryError
@@ -33,6 +36,7 @@ zentry = ZentryClient(
     settings.zentry_seller_key,
     settings.zentry_seller_secret,
 )
+chungchi = ChungChiClient(settings.chungchi_base_url, settings.chungchi_api_key)
 
 
 ADMIN_MENU = ReplyKeyboardMarkup(
@@ -60,7 +64,9 @@ VIP_ADMIN_MENU_EN = ReplyKeyboardMarkup(
     [[KeyboardButton("🛡️ Key control")], [KeyboardButton("🌐 Language / Idioma")]], resize_keyboard=True
 )
 USER_MENU = ReplyKeyboardMarkup(
-    [[KeyboardButton("🛒 Comprar keys"), KeyboardButton("💳 Recargar saldo")],
+    [[KeyboardButton("🍎 Certificado iOS"), KeyboardButton("🔑 Use Key")],
+     [KeyboardButton("🔍 Check UDID"), KeyboardButton("⚙️ Settings")],
+     [KeyboardButton("🛒 Comprar keys"), KeyboardButton("💳 Recargar saldo")],
      [KeyboardButton("🔑 Mis keys"), KeyboardButton("🔍 Consultar key")],
      [KeyboardButton("👤 Mi cuenta"), KeyboardButton("🧾 Historial")],
      [KeyboardButton("🆘 Soporte"), KeyboardButton("🌐 Idioma / Language")],
@@ -68,10 +74,18 @@ USER_MENU = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 USER_MENU_EN = ReplyKeyboardMarkup(
-    [[KeyboardButton("🛒 Buy keys"), KeyboardButton("💳 Add balance")],
+    [[KeyboardButton("🍎 iOS Certificate"), KeyboardButton("🔑 Use Key")],
+     [KeyboardButton("🔍 Check UDID"), KeyboardButton("⚙️ Settings")],
+     [KeyboardButton("🛒 Buy keys"), KeyboardButton("💳 Add balance")],
      [KeyboardButton("🔑 My keys"), KeyboardButton("🔍 Check key")],
      [KeyboardButton("👤 My account"), KeyboardButton("🧾 History")],
      [KeyboardButton("🆘 Support"), KeyboardButton("🌐 Language / Idioma")]],
+    resize_keyboard=True,
+)
+CERTIFICATE_MENU = ReplyKeyboardMarkup(
+    [[KeyboardButton("👋 Welcome!")],
+     [KeyboardButton("🔍 Check UDID"), KeyboardButton("🔑 Use Key")],
+     [KeyboardButton("⚙️ Settings")]],
     resize_keyboard=True,
 )
 PENDING_MENU = ReplyKeyboardMarkup(
@@ -417,6 +431,173 @@ async def show_my_keys(update: Update) -> None:
         await send_key_status(update.effective_message, row, language)
 
 
+def new_certificate_key() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    groups = ["".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3)]
+    return "CERT-" + "-".join(groups)
+
+
+def valid_udid(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Fa-f0-9-]{20,50}", value.strip()))
+
+
+def safe_certificate_name(value: str) -> str:
+    clean = "".join(c for c in value.strip() if c.isalnum() or c in "-_ ").strip()
+    return clean[:40]
+
+
+async def show_certificate_offer(update: Update) -> None:
+    if not chungchi.configured:
+        await update.effective_message.reply_text(
+            "⚠️ Certificados temporalmente no disponibles. Falta configurar el API en Render."
+        )
+        return
+    try:
+        plans, balance = await asyncio.gather(
+            asyncio.to_thread(chungchi.plans), asyncio.to_thread(chungchi.balance)
+        )
+    except ChungChiError as exc:
+        await update.effective_message.reply_text(f"⚠️ No pude verificar ChungChi: {html.escape(str(exc))}", parse_mode=ParseMode.HTML)
+        return
+    plan = next((p for p in plans if int(p.get("id", -1)) == settings.chungchi_plan_id), None)
+    if not plan:
+        await update.effective_message.reply_text("⚠️ El plan configurado no está disponible en ChungChi.")
+        return
+    provider_balance = float(balance.get("wallet", 0) or 0)
+    provider_cost = float(plan.get("amount", 0) or 0)
+    if provider_balance < provider_cost:
+        await update.effective_message.reply_text("⚠️ Certificados agotados temporalmente. Contacta al soporte.")
+        return
+    keys = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Comprar", callback_data="cert:confirm"),
+        InlineKeyboardButton("❌ Cancelar", callback_data="cancel"),
+    ]])
+    await update.effective_message.reply_text(
+        "🍎 <b>CERTIFICADO iOS</b>\n━━━━━━━━━━━━━━━━━━\n"
+        f"💵 Precio: <b>{money(settings.chungchi_sell_price_cents)}</b>\n"
+        f"📅 Validez: <b>{html.escape(str(plan.get('validity') or '12 meses'))}</b>\n"
+        f"🛡️ Garantía: <b>{html.escape(str(plan.get('warranty') or 'según el plan'))}</b>\n"
+        "📦 Incluye <code>.p12</code>, contraseña y <code>.mobileprovision</code>.\n\n"
+        "El costo se descontará de tu saldo del bot.",
+        reply_markup=keys,
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def begin_certificate_key(update: Update, context: ContextTypes.DEFAULT_TYPE, key_code: str | None = None) -> None:
+    if key_code:
+        row = db.certificate_key(update.effective_user.id, key_code)
+        if not row or row["status"] != "available":
+            await update.effective_message.reply_text("❌ Esa key no existe, no te pertenece o ya fue utilizada.")
+            return
+        context.user_data["flow"] = {"name": "certificate_udid", "certificate_key": row["key_code"]}
+        await update.effective_message.reply_text(
+            "📱 Envía el <b>UDID</b> del iPhone o iPad.", parse_mode=ParseMode.HTML, reply_markup=CERTIFICATE_MENU
+        )
+        return
+    context.user_data["flow"] = {"name": "certificate_key"}
+    await update.effective_message.reply_text("🔑 Envía tu key de certificado:", reply_markup=CERTIFICATE_MENU)
+
+
+async def begin_udid_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["flow"] = {"name": "certificate_lookup_udid"}
+    await update.effective_message.reply_text("🔍 Envía el UDID que deseas consultar:", reply_markup=CERTIFICATE_MENU)
+
+
+def certificate_status_text(order) -> str:
+    labels = {
+        "submitting": "Enviando", "pending": "Procesando", "processing": "Procesando",
+        "review": "Verificación", "completed": "Completado", "failed": "Fallido", "cancelled": "Cancelado",
+    }
+    label = labels.get(order["status"], order["status"])
+    return (
+        f"🍎 <b>Certificado #{order['id']}</b>\n"
+        f"UDID: <code>{html.escape(order['udid'])}</code>\n"
+        f"Estado: <b>{html.escape(label)}</b>\n"
+        f"Pedido: <code>{html.escape(order['provider_order_code'] or 'pendiente')}</code>"
+    )
+
+
+async def deliver_certificate(bot, order) -> None:
+    if order["status"] != "completed" or not order["download_url"]:
+        return
+    base_url = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    install_url = f"{base_url}/certificate/install/{order['install_token']}"
+    keys = InlineKeyboardMarkup([[InlineKeyboardButton("📲 Instalar certificado", url=install_url)]])
+    try:
+        data = await asyncio.to_thread(chungchi.download, order["download_url"])
+        stream = io.BytesIO(data)
+        stream.name = f"{safe_certificate_name(order['display_name']) or 'certificate'}.zip"
+        await bot.send_document(
+            order["user_id"], stream,
+            caption=(
+                "✅ <b>CERTIFICADO LISTO</b>\n━━━━━━━━━━━━━━━━━━\n"
+                f"📦 Nombre: <b>{html.escape(order['display_name'])}</b>\n"
+                f"🔐 Contraseña P12: <code>{html.escape(order['p12_password'])}</code>\n"
+                f"🧾 Pedido: <code>{html.escape(order['provider_order_code'] or '')}</code>"
+            ),
+            reply_markup=keys,
+            parse_mode=ParseMode.HTML,
+        )
+        db.mark_certificate_delivered(order["id"])
+    except Exception as exc:
+        log.warning("No se pudo enviar el ZIP del certificado %s: %s", order["id"], exc)
+        await bot.send_message(
+            order["user_id"],
+            "✅ Tu certificado está listo. Usa el botón privado para descargarlo.",
+            reply_markup=keys,
+        )
+
+
+async def submit_certificate_order(message, context: ContextTypes.DEFAULT_TYPE) -> None:
+    flow = context.user_data.get("certificate_pending")
+    if not flow:
+        await message.reply_text("La solicitud expiró. Pulsa 🔑 Use Key para comenzar de nuevo.")
+        return
+    install_token = secrets.token_urlsafe(32)
+    expires = (datetime.now(timezone.utc) + timedelta(hours=settings.certificate_link_ttl_hours)).isoformat(timespec="seconds")
+    try:
+        local = db.create_certificate_order(
+            message.from_user.id, flow["certificate_key"], settings.chungchi_plan_id,
+            flow["udid"], flow["device"], flow["p12_password"], flow["display_name"],
+            install_token, expires,
+        )
+    except StoreError as exc:
+        await message.reply_text(f"❌ {html.escape(str(exc))}", parse_mode=ParseMode.HTML)
+        return
+    context.user_data.pop("certificate_pending", None)
+    status_message = await message.reply_text("⏳ Enviando tu pedido de certificado…")
+    try:
+        provider = await asyncio.to_thread(
+            chungchi.create_order, settings.chungchi_plan_id, flow["udid"], flow["device"], flow["p12_password"]
+        )
+        order = db.attach_provider_order(local["id"], provider)
+    except ChungChiError as exc:
+        release = exc.status is not None and exc.status < 500 and exc.status != 429
+        db.mark_certificate_error(local["id"], str(exc), release)
+        if release:
+            await status_message.edit_text(f"❌ {html.escape(str(exc))}\nTu key no fue consumida.", parse_mode=ParseMode.HTML)
+        else:
+            await status_message.edit_text("⚠️ ChungChi no confirmó el pedido. Lo dejé en verificación para evitar un cobro duplicado.")
+        return
+    await status_message.edit_text(certificate_status_text(order), parse_mode=ParseMode.HTML)
+    if order["status"] == "completed":
+        await deliver_certificate(context.bot, order)
+
+
+async def refresh_certificate_order(bot, row) -> None:
+    if not row["provider_order_code"]:
+        return
+    try:
+        provider = await asyncio.to_thread(chungchi.order, row["provider_order_code"])
+    except ChungChiError as exc:
+        log.warning("No se actualizó certificado %s: %s", row["id"], exc)
+        return
+    updated = db.update_certificate_order(row["provider_order_code"], provider)
+    if updated and updated["status"] == "completed" and not updated["delivered_at"]:
+        await deliver_certificate(bot, updated)
+
+
 async def send_key_status(message, row, language: str) -> None:
     if not row["expires_at"]:
         status, active = ("No tracking (old purchase)" if language == "en" else "Sin seguimiento (compra antigua)"), False
@@ -587,7 +768,21 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await send_home(update, context)
         return
 
-    if not admin_panel and text in ("🛒 Comprar keys", "🛒 Buy keys"):
+    if not admin_panel and text in ("🍎 Certificado iOS", "🍎 iOS Certificate"):
+        await show_certificate_offer(update)
+    elif not admin_panel and text == "🔑 Use Key":
+        await begin_certificate_key(update, context)
+    elif not admin_panel and text == "🔍 Check UDID":
+        await begin_udid_lookup(update, context)
+    elif not admin_panel and text == "⚙️ Settings":
+        keys = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🌐 Idioma", callback_data="certsettings:language"),
+            InlineKeyboardButton("👤 Mi cuenta", callback_data="certsettings:account"),
+        ]])
+        await update.effective_message.reply_text("⚙️ <b>Settings</b>", reply_markup=keys, parse_mode=ParseMode.HTML)
+    elif not admin_panel and text == "👋 Welcome!":
+        await send_home(update, context)
+    elif not admin_panel and text in ("🛒 Comprar keys", "🛒 Buy keys"):
         await show_buy(update)
     elif not admin_panel and text in ("💳 Recargar saldo", "💳 Add balance"):
         await begin_topup(update, context)
@@ -638,6 +833,86 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return False
     message = update.effective_message
     text = (message.text or "").strip()
+
+    if flow["name"] == "certificate_key":
+        row = db.certificate_key(message.from_user.id, text)
+        if not row or row["status"] != "available":
+            await message.reply_text("❌ Key inválida, usada o perteneciente a otra cuenta.")
+            return True
+        flow["name"], flow["certificate_key"] = "certificate_udid", row["key_code"]
+        await message.reply_text("📱 Envía el UDID del iPhone o iPad:")
+        return True
+
+    if flow["name"] == "certificate_udid":
+        if not valid_udid(text):
+            await message.reply_text("❌ UDID inválido. Debe contener únicamente letras A-F, números y guiones.")
+            return True
+        flow["udid"] = text.upper()
+        flow["name"] = "certificate_device"
+        keys = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📱 iPhone", callback_data="certdevice:iphone"),
+            InlineKeyboardButton("▣ iPad", callback_data="certdevice:ipad"),
+        ]])
+        await message.reply_text("Selecciona el tipo de dispositivo:", reply_markup=keys)
+        return True
+
+    if flow["name"] == "certificate_device":
+        await message.reply_text("Usa los botones para seleccionar iPhone o iPad.")
+        return True
+
+    if flow["name"] == "certificate_password":
+        if not 1 <= len(text) <= 64:
+            await message.reply_text("❌ La contraseña debe tener entre 1 y 64 caracteres.")
+            return True
+        flow["p12_password"] = text
+        flow["name"] = "certificate_name"
+        await message.reply_text("✏️ Escribe el nombre que deseas para el archivo del certificado:")
+        return True
+
+    if flow["name"] == "certificate_name":
+        display_name = safe_certificate_name(text)
+        if not display_name:
+            await message.reply_text("❌ Escribe un nombre válido usando letras, números, espacios, guion o guion bajo.")
+            return True
+        flow["display_name"] = display_name
+        context.user_data["certificate_pending"] = dict(flow)
+        context.user_data.pop("flow", None)
+        keys = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Crear certificado", callback_data="cert:create"),
+            InlineKeyboardButton("❌ Cancelar", callback_data="cancel"),
+        ]])
+        await message.reply_text(
+            "🍎 <b>Confirma los datos</b>\n"
+            f"UDID: <code>{html.escape(flow['udid'])}</code>\n"
+            f"Dispositivo: <b>{html.escape(flow['device'])}</b>\n"
+            f"Nombre: <b>{html.escape(display_name)}</b>\n"
+            f"Contraseña P12: <code>{html.escape(flow['p12_password'])}</code>",
+            reply_markup=keys,
+            parse_mode=ParseMode.HTML,
+        )
+        return True
+
+    if flow["name"] == "certificate_lookup_udid":
+        if not valid_udid(text):
+            await message.reply_text("❌ UDID inválido.")
+            return True
+        rows = db.certificate_orders_for_user(message.from_user.id, text.upper())
+        context.user_data.pop("flow", None)
+        if not rows:
+            await message.reply_text("🔍 No encontré certificados tuyos para ese UDID.", reply_markup=CERTIFICATE_MENU)
+            return True
+        for row in rows[:5]:
+            if row["provider_order_code"] and row["status"] not in ("completed", "failed", "cancelled"):
+                await refresh_certificate_order(context.bot, row)
+                row = db.certificate_order(row["id"], message.from_user.id)
+            buttons = None
+            if row["status"] == "completed":
+                base_url = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+                buttons = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📲 Instalar certificado", url=f"{base_url}/certificate/install/{row['install_token']}")
+                ]])
+            await message.reply_text(certificate_status_text(row), reply_markup=buttons, parse_mode=ParseMode.HTML)
+        return True
 
     if flow["name"] == "partner_login":
         flow["name"], flow["login"] = "partner_password", text
@@ -1063,6 +1338,76 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await send_home(update, context)
         return
 
+    if data.startswith("certsettings:"):
+        await query.answer()
+        if data.endswith(":language"):
+            await choose_language(update)
+        else:
+            await show_account(update)
+        return
+
+    if data == "cert:confirm":
+        if admin_panel or user["role"] not in ("reseller", "admin"):
+            await query.answer("Acceso no autorizado", show_alert=True)
+            return
+        await query.answer("Verificando disponibilidad…")
+        try:
+            plans, balance = await asyncio.gather(
+                asyncio.to_thread(chungchi.plans), asyncio.to_thread(chungchi.balance)
+            )
+            plan = next((p for p in plans if int(p.get("id", -1)) == settings.chungchi_plan_id), None)
+            if not plan or float(balance.get("wallet", 0) or 0) < float(plan.get("amount", 0) or 0):
+                raise ChungChiError("Certificados agotados temporalmente")
+            digest = hashlib.sha256(
+                f"{query.from_user.id}:{query.message.chat_id}:{query.message.message_id}:{settings.bot_token}".encode()
+            ).hexdigest().upper()
+            key_code = f"CERT-{digest[:4]}-{digest[4:8]}-{digest[8:12]}"
+            issued = db.buy_certificate_key(query.from_user.id, key_code, settings.chungchi_sell_price_cents)
+        except sqlite3.IntegrityError:
+            await query.answer("Esta compra ya fue procesada", show_alert=True)
+            return
+        except (ChungChiError, InsufficientBalance, NotApproved) as exc:
+            await query.message.reply_text(f"❌ {html.escape(str(exc))}", parse_mode=ParseMode.HTML)
+            return
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            "🎉 <b>PAGO CONFIRMADO</b>\n━━━━━━━━━━━━━━━━━━\n"
+            f"🔑 Key: <code>{issued['key_code']}</code>\n"
+            f"💰 Saldo restante: <b>{money(issued['balance_cents'])}</b>\n\n"
+            "La key se activó para iniciar tu certificado.",
+            reply_markup=CERTIFICATE_MENU,
+            parse_mode=ParseMode.HTML,
+        )
+        context.user_data["flow"] = {"name": "certificate_udid", "certificate_key": issued["key_code"]}
+        await query.message.reply_text("📱 Envía el UDID del iPhone o iPad:")
+        return
+
+    if data.startswith("certdevice:"):
+        flow = context.user_data.get("flow")
+        device = data.split(":", 1)[1]
+        if not flow or flow.get("name") != "certificate_device" or device not in ("iphone", "ipad"):
+            await query.answer("La solicitud expiró", show_alert=True)
+            return
+        flow["device"] = device
+        flow["name"] = "certificate_password"
+        await query.answer()
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            "🔐 Escribe la contraseña que deseas para el archivo <code>.p12</code>.\n"
+            "Puedes escribir <code>1</code> para usar la contraseña sencilla.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if data == "cert:create":
+        if admin_panel:
+            await query.answer("Usa el bot de ventas", show_alert=True)
+            return
+        await query.answer("Creando pedido…")
+        await query.edit_message_reply_markup(reply_markup=None)
+        await submit_certificate_order(query.message, context)
+        return
+
     if data.startswith("newrole:"):
         if not admin_panel or not is_admin(query.from_user.id):
             await query.answer("Solo Admin", show_alert=True)
@@ -1433,6 +1778,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data == "cancel":
         await query.answer()
+        context.user_data.pop("flow", None)
+        context.user_data.pop("certificate_pending", None)
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text("Compra cancelada.")
         return
@@ -1491,6 +1838,53 @@ def build_application(token: str, panel_name: str) -> Application:
     return app
 
 
+def find_provider_order(payload):
+    if isinstance(payload, dict):
+        if payload.get("order_code"):
+            return payload
+        for value in payload.values():
+            found = find_provider_order(value)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = find_provider_order(value)
+            if found:
+                return found
+    return None
+
+
+async def process_certificate_webhook(bot, payload: dict) -> None:
+    provider = find_provider_order(payload)
+    if not provider:
+        log.warning("Webhook ChungChi sin order_code")
+        return
+    order = db.update_certificate_order(str(provider["order_code"]), provider)
+    if not order:
+        log.warning("Webhook ChungChi para pedido desconocido: %s", provider["order_code"])
+        return
+    if order["status"] == "completed" and not order["delivered_at"]:
+        await deliver_certificate(bot, order)
+    elif order["status"] in ("failed", "cancelled"):
+        await bot.send_message(
+            order["user_id"],
+            f"⚠️ El pedido <code>{html.escape(order['provider_order_code'])}</code> terminó como "
+            f"<b>{html.escape(order['status'])}</b>. Tu key quedó disponible para reintentar.",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+async def certificate_poll_loop(bot, stop_event: asyncio.Event) -> None:
+    while not stop_event.is_set():
+        if chungchi.configured:
+            for row in db.pending_certificate_orders():
+                await refresh_certificate_order(bot, row)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=60)
+        except asyncio.TimeoutError:
+            pass
+
+
 async def run_bots() -> None:
     db.initialize()
     server = start_health_server(asyncio.get_running_loop())
@@ -1500,6 +1894,7 @@ async def run_bots() -> None:
     initialized = []
     started = []
     stop_event = asyncio.Event()
+    poll_task = None
     loop = asyncio.get_running_loop()
     for signame in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -1554,9 +1949,64 @@ async def run_bots() -> None:
                         raise
                     log.warning("No se pudo registrar webhook; reintento %s/5", attempt, exc_info=True)
                     await asyncio.sleep(attempt * 2)
+        webhook_secret = settings.chungchi_webhook_secret or db.private_setting("chungchi_webhook_secret")
+        if chungchi.configured and not webhook_secret:
+            try:
+                webhook = await asyncio.to_thread(chungchi.configure_webhook, f"{base_url}/chungchi/webhook")
+                webhook_secret = str(webhook.get("secret") or "")
+                if webhook_secret:
+                    db.set_private_setting("chungchi_webhook_secret", webhook_secret)
+                else:
+                    log.warning("ChungChi no devolvió el secreto del webhook")
+            except ChungChiError as exc:
+                log.warning("No se pudo configurar webhook ChungChi: %s", exc)
+
+        def certificate_lookup(token: str):
+            row = db.install_order(token)
+            if not row:
+                return None
+            try:
+                if datetime.fromisoformat(row["install_expires_at"]) < datetime.now(timezone.utc):
+                    return None
+            except ValueError:
+                return None
+            return row
+
+        def certificate_download(order):
+            return chungchi.download(order["download_url"])
+
+        def certificate_webhook(raw: bytes, headers) -> bool:
+            if not webhook_secret:
+                return False
+            timestamp = headers.get("X-Webhook-Timestamp", "")
+            supplied = headers.get("X-Webhook-Signature", "")
+            if not timestamp or not supplied:
+                return False
+            expected = "v1=" + hmac.new(
+                webhook_secret.encode(), timestamp.encode() + b"." + raw, hashlib.sha256
+            ).hexdigest()
+            if not hmac.compare_digest(expected, supplied):
+                return False
+            try:
+                payload = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return False
+            asyncio.run_coroutine_threadsafe(
+                process_certificate_webhook(reseller_app.bot, payload), server.event_loop
+            )
+            return True
+
+        server.configure_certificates(certificate_lookup, certificate_download, certificate_webhook)
+        poll_task = asyncio.create_task(certificate_poll_loop(reseller_app.bot, stop_event))
         log.info("Bots iniciados por webhook: revendedores + admin (%s)", settings.store_name)
         await stop_event.wait()
     finally:
+        if poll_task:
+            poll_task.cancel()
+            try:
+                await poll_task
+            except asyncio.CancelledError:
+                pass
         for app in reversed(started):
             if app.running:
                 await app.stop()

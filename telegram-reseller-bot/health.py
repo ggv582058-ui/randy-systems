@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import hmac
 import json
 import logging
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 from telegram import Update
 
@@ -22,15 +24,30 @@ class BotHTTPServer(ThreadingHTTPServer):
         self.event_loop = event_loop
         self.applications = {}
         self.secrets = {}
+        self.certificate_lookup = None
+        self.certificate_download = None
+        self.certificate_webhook = None
 
     def configure(self, applications: dict, secrets: dict[str, str]) -> None:
         self.applications = applications
         self.secrets = secrets
 
+    def configure_certificates(self, lookup, download, webhook) -> None:
+        self.certificate_lookup = lookup
+        self.certificate_download = download
+        self.certificate_webhook = webhook
+
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        if self.path not in ("/", "/health"):
+        path = urlsplit(self.path).path
+        if path.startswith("/certificate/install/"):
+            self._certificate_page(path.rsplit("/", 1)[-1])
+            return
+        if path.startswith("/certificate/download/"):
+            self._certificate_file(path.rsplit("/", 1)[-1])
+            return
+        if path not in ("/", "/health"):
             self.send_response(404)
             self.end_headers()
             return
@@ -41,10 +58,102 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _certificate_page(self, token: str) -> None:
+        server: BotHTTPServer = self.server
+        order = server.certificate_lookup(token) if server.certificate_lookup else None
+        if not order:
+            self.send_error(404, "Enlace inválido o expirado")
+            return
+        name = html.escape(order["display_name"])
+        password = html.escape(order["p12_password"])
+        password_js = json.dumps(order["p12_password"])
+        token_safe = html.escape(token, quote=True)
+        status = html.escape(order["status"])
+        ready = order["status"] == "completed" and bool(order["download_url"])
+        actions = (f"""
+          <button id="share">📲 Abrir en una aplicación</button>
+          <a class="button secondary" href="/certificate/download/{token_safe}">⬇️ Descargar paquete ZIP</a>
+          <button id="copy-password" class="secondary">🔐 Copiar contraseña</button>
+        """ if ready else "<p class='waiting'>⏳ El certificado todavía se está preparando. Actualiza esta página en unos minutos.</p>")
+        script = (f"""
+        <script>
+        document.getElementById('share')?.addEventListener('click', async () => {{
+          const response = await fetch('/certificate/download/{token_safe}');
+          if (!response.ok) {{ alert('No se pudo descargar el certificado'); return; }}
+          const blob = await response.blob();
+          const file = new File([blob], '{name}.zip', {{type:'application/zip'}});
+          if (navigator.canShare && navigator.canShare({{files:[file]}})) {{
+            await navigator.share({{files:[file], title:'Certificado {name}'}});
+          }} else {{ window.location.href='/certificate/download/{token_safe}'; }}
+        }});
+        document.getElementById('copy-password')?.addEventListener('click', async () => {{
+          await navigator.clipboard.writeText({password_js});
+        }});
+        </script>
+        """ if ready else "")
+        body = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1"><title>Randy Certificates</title>
+        <style>body{{margin:0;background:#070b17;color:#fff;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}}
+        main{{max-width:560px;margin:auto;padding:34px 20px}}.card{{background:#121a2c;border:1px solid #263452;border-radius:24px;padding:24px;box-shadow:0 20px 55px #0008}}
+        h1{{color:#55a4ff}}.tag{{color:#9eb3d8}}code{{display:block;background:#080d19;padding:14px;border-radius:14px;overflow-wrap:anywhere}}
+        button,.button{{box-sizing:border-box;display:block;width:100%;margin-top:12px;border:0;border-radius:15px;padding:15px;background:#1687ff;color:white;font-size:17px;font-weight:700;text-align:center;text-decoration:none}}
+        .secondary{{background:#25334e}}.apps{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px}}.app{{background:#0b1120;border-radius:14px;padding:12px;text-align:center;color:#bcd2f5}}.waiting{{color:#ffd36b}}</style></head>
+        <body><main><div class="card"><div class="tag">RANDY SYSTEMS · ENTREGA PRIVADA</div><h1>{name}</h1>
+        <p>Estado: <b>{status}</b></p><p>Contraseña del P12:</p><code>{password}</code>{actions}
+        <div class="apps"><div class="app">Feather</div><div class="app">GBox</div><div class="app">Scarlet</div><div class="app">Archivos</div></div>
+        <p class="tag">Usa “Abrir en una aplicación” y selecciona tu firmador. iOS puede pedirte confirmar la importación.</p></div></main>{script}</body></html>""".encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _certificate_file(self, token: str) -> None:
+        server: BotHTTPServer = self.server
+        order = server.certificate_lookup(token) if server.certificate_lookup else None
+        if not order or order["status"] != "completed" or not order["download_url"]:
+            self.send_error(404, "Certificado no disponible")
+            return
+        try:
+            data = server.certificate_download(order)
+        except Exception:
+            log.exception("No se pudo descargar el certificado %s", order["id"])
+            self.send_error(502, "No se pudo descargar el certificado")
+            return
+        filename = "".join(c for c in order["display_name"] if c.isalnum() or c in "-_ ").strip() or "certificate"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}.zip"')
+        self.send_header("Cache-Control", "private, no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_POST(self) -> None:
         server: BotHTTPServer = self.server
-        app = server.applications.get(self.path)
-        secret = server.secrets.get(self.path)
+        path = urlsplit(self.path).path
+        if path == "/chungchi/webhook":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0 or length > 1_000_000:
+                    raise ValueError("Tamaño inválido")
+                raw = self.rfile.read(length)
+                if not server.certificate_webhook or not server.certificate_webhook(raw, self.headers):
+                    self.send_error(401)
+                    return
+            except Exception:
+                log.exception("Webhook ChungChi inválido")
+                self.send_error(400)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"received":true}')
+            return
+        app = server.applications.get(path)
+        secret = server.secrets.get(path)
         supplied = self.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
         if app is None or secret is None:
             self.send_error(404)

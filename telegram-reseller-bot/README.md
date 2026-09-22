@@ -17,6 +17,9 @@ Dos bots de Telegram conectados al mismo inventario: uno privado para el Admin y
 - Anuncios masivos de texto, foto, video, animación, sticker o documento.
 - Webhook opcional para conectar compras con un API externo.
 - Integración Seller API de ZentryAuth para generar hasta 100 keys por lote, consultar, resetear HWID y bloquear/desbloquear licencias desde el bot Admin.
+- Venta automática de certificados iOS mediante ChungChi: key interna de un uso, captura de UDID, iPhone/iPad, contraseña P12 y nombre personalizado.
+- Webhook ChungChi firmado con HMAC, consulta de respaldo cada minuto y entrega automática del ZIP.
+- Página privada y temporal para descargar o compartir el `.p12` y `.mobileprovision` con Feather, GBox, Scarlet o Archivos.
 - Historial contable, órdenes y estadísticas.
 - Compra y aprobación transaccionales para evitar cobrar o entregar dos veces.
 - Archivo `render.yaml` y disco persistente para funcionamiento 24/7.
@@ -43,6 +46,11 @@ KEY_API_TOKEN=token_opcional_del_api
 ZENTRY_SELLER_KEY=credencial_seller_privada
 ZENTRY_SELLER_SECRET=secreto_seller_privado
 ZENTRY_KEY_PREFIX=RANDY
+CHUNGCHI_API_KEY=api_key_privada
+CHUNGCHI_BASE_URL=https://chungchi.store
+CHUNGCHI_PLAN_ID=23
+CHUNGCHI_SELL_PRICE_CENTS=350
+CERTIFICATE_LINK_TTL_HOURS=24
 ```
 
 4. Instala y ejecuta:
@@ -64,6 +72,8 @@ python bot.py
 - El Admin recibe **Aprobar / Rechazar**.
 - El revendedor solicita una recarga y manda comprobante.
 - Tras la aprobación, compra un producto y recibe la key inmediatamente.
+- En **Certificado iOS**, una compra de $3.50 genera una key interna y comienza el pedido automático del plan ChungChi configurado.
+- **Use Key** permite retomar una key no usada y **Check UDID** consulta solamente los pedidos del usuario actual.
 
 ## Pruebas
 
