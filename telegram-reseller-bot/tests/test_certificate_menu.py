@@ -11,6 +11,20 @@ import bot
 
 
 class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
+    async def test_catalog_waits_for_product_selection_before_sending_a_photo(self):
+        message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
+        update = SimpleNamespace(effective_user=SimpleNamespace(id=2), effective_message=message)
+        product = {"id": 17, "name": "Randy Mod", "effective_price_cents": 1500,
+                   "stock": 3, "custom_emoji_id": None}
+        with patch.object(bot.db, "products_for_user", return_value=[product]), \
+             patch.object(bot.db, "product_media") as product_media:
+            await bot.show_buy(update)
+        message.reply_text.assert_awaited_once()
+        message.reply_photo.assert_not_awaited()
+        product_media.assert_not_called()
+        button = message.reply_text.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        self.assertEqual(button.callback_data, "buy:17")
+
     def test_randy_cover_is_packaged_for_default_offers(self):
         cover = bot.randy_cover()
         self.assertGreater(len(cover), 1000)
