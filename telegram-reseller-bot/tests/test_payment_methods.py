@@ -12,6 +12,30 @@ import bot
 
 
 class PaymentMethodTests(unittest.IsolatedAsyncioTestCase):
+    async def test_menu_shows_payment_methods_before_amount(self):
+        message = SimpleNamespace(reply_text=AsyncMock())
+        context = SimpleNamespace(user_data={})
+        await bot.begin_topup(SimpleNamespace(effective_message=message), context)
+        self.assertEqual(context.user_data["flow"]["name"], "topup_choose_method")
+        labels = [row[0].text for row in message.reply_text.await_args.kwargs["reply_markup"].inline_keyboard]
+        self.assertTrue(any("Cash App" in label for label in labels))
+        self.assertTrue(any("PayPal" in label for label in labels))
+
+    async def test_select_method_then_amount_shows_payment_card(self):
+        message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock(), text="25.00")
+        query = SimpleNamespace(data="pay:method:cashapp", from_user=SimpleNamespace(id=2),
+                                answer=AsyncMock(), message=message)
+        context = SimpleNamespace(user_data={"flow": {"name": "topup_choose_method"}})
+        configured = replace(bot.settings, cash_app_url="https://cash.app/$SampleAccount")
+        with patch.object(bot, "settings", configured), \
+             patch.object(bot, "current_user", return_value={"role": "reseller"}), \
+             patch.object(bot, "panel", return_value="reseller"):
+            await bot.callback(SimpleNamespace(callback_query=query), context)
+            self.assertEqual(context.user_data["flow"]["name"], "topup_amount")
+            await bot.handle_flow(SimpleNamespace(effective_message=message), context)
+        self.assertEqual(context.user_data["flow"]["name"], "topup_method")
+        self.assertIn("$25.00", message.reply_photo.await_args.kwargs["caption"])
+
     async def test_amount_requires_method_before_proof(self):
         message = SimpleNamespace(text="25.00", photo=None, document=None, reply_text=AsyncMock())
         update = SimpleNamespace(effective_message=message)

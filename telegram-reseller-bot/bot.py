@@ -753,8 +753,11 @@ async def show_stats(update: Update) -> None:
 
 
 async def begin_topup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data["flow"] = {"name": "topup_amount"}
-    await update.effective_message.reply_text("💳 Escribe la cantidad que deseas recargar. Ejemplo: <code>25.00</code>", parse_mode=ParseMode.HTML)
+    context.user_data["flow"] = {"name": "topup_choose_method"}
+    await update.effective_message.reply_text(
+        "💳 <b>Recargar saldo</b>\nElige tu método de pago:",
+        reply_markup=payment_methods_keyboard(), parse_mode=ParseMode.HTML,
+    )
 
 
 def payment_url(method: str) -> str:
@@ -779,7 +782,7 @@ def payment_methods_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-async def show_payment_method(query, context: ContextTypes.DEFAULT_TYPE, method: str) -> None:
+async def show_payment_method(message, context: ContextTypes.DEFAULT_TYPE, method: str) -> None:
     flow = context.user_data.get("flow", {})
     amount = money(flow["amount_cents"])
     if method == "zelle" and payment_ready(method):
@@ -821,9 +824,9 @@ async def show_payment_method(query, context: ContextTypes.DEFAULT_TYPE, method:
     image_path = Path(__file__).with_name(f"payment-{method}.png")
     if image_path.is_file():
         with image_path.open("rb") as picture:
-            await query.message.reply_photo(picture, caption=details, reply_markup=buttons, parse_mode=ParseMode.HTML)
+            await message.reply_photo(picture, caption=details, reply_markup=buttons, parse_mode=ParseMode.HTML)
     else:
-        await query.message.reply_text(details, reply_markup=buttons, parse_mode=ParseMode.HTML)
+        await message.reply_text(details, reply_markup=buttons, parse_mode=ParseMode.HTML)
 
 
 async def begin_add_keys(update: Update) -> None:
@@ -1443,10 +1446,17 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             await message.reply_text("❌ Cantidad inválida. Ejemplo: 25.00")
             return True
         flow["name"] = "topup_method"
-        await message.reply_text(
-            f"💳 <b>Recarga: {money(flow['amount_cents'])}</b>\nElige cómo deseas pagar:",
-            reply_markup=payment_methods_keyboard(), parse_mode=ParseMode.HTML,
-        )
+        if flow.get("method") and payment_ready(flow["method"]):
+            await show_payment_method(message, context, flow["method"])
+        else:
+            await message.reply_text(
+                f"💳 <b>Recarga: {money(flow['amount_cents'])}</b>\nElige cómo deseas pagar:",
+                reply_markup=payment_methods_keyboard(), parse_mode=ParseMode.HTML,
+            )
+        return True
+
+    if flow["name"] == "topup_choose_method":
+        await message.reply_text("💳 Primero elige un método usando los botones:", reply_markup=payment_methods_keyboard())
         return True
 
     if flow["name"] == "topup_method":
@@ -1624,20 +1634,29 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data.startswith("pay:"):
         flow = context.user_data.get("flow", {})
-        if admin_panel or user["role"] not in ("reseller", "admin") or flow.get("name") != "topup_method":
+        if admin_panel or user["role"] not in ("reseller", "admin") or flow.get("name") not in ("topup_choose_method", "topup_method"):
             await query.answer("Inicia otra recarga desde el menú", show_alert=True)
             return
         await query.answer()
         if data == "pay:methods":
             await query.message.reply_text("💳 Elige tu método:", reply_markup=payment_methods_keyboard())
-        elif data == "pay:proof" and payment_ready(flow.get("method", "")):
+        elif data == "pay:proof" and flow["name"] == "topup_method" and payment_ready(flow.get("method", "")):
             flow["name"] = "topup_proof"
             await query.message.reply_text("📎 Envía una captura/documento del pago o escribe la referencia.")
         elif data.startswith("pay:method:"):
             method = data.split(":", 2)[2]
             if method in ("zelle", "cashapp", "paypal"):
                 flow["method"] = method if payment_ready(method) else None
-                await show_payment_method(query, context, method)
+                if flow["name"] == "topup_choose_method" and payment_ready(method):
+                    flow["name"] = "topup_amount"
+                    await query.message.reply_text(
+                        "💰 Escribe la cantidad que deseas recargar. Ejemplo: <code>25.00</code>",
+                        parse_mode=ParseMode.HTML,
+                    )
+                elif flow["name"] == "topup_choose_method":
+                    await query.message.reply_text("⏳ Este método aún no está disponible. Elige otro:", reply_markup=payment_methods_keyboard())
+                else:
+                    await show_payment_method(query.message, context, method)
         return
 
     if data.startswith("lang:"):

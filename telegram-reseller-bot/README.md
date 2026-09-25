@@ -77,7 +77,7 @@ python bot.py
 - En **Control keys**, el Admin puede consultar, resetear HWID, bloquear o desbloquear una licencia.
 - Un usuario nuevo pulsa **Solicitar acceso**.
 - El Admin recibe **Aprobar / Rechazar**.
-- El revendedor indica el importe, elige Zelle, Cash App o PayPal y ve la tarjeta con los datos o el enlace; después envía el comprobante. Los métodos sin configurar aparecen pendientes y no aceptan comprobantes.
+- Al tocar **Recargar saldo**, el revendedor ve inmediatamente Zelle, Cash App y PayPal. Elige un método, escribe el importe, ve la tarjeta con los datos o el enlace y envía su comprobante. Los métodos sin configurar aparecen pendientes y no aceptan comprobantes.
 - Tras la aprobación, compra un producto y recibe la key inmediatamente.
 - En **Certificado iOS**, una compra de $3.50 genera una key interna y comienza el pedido automático del plan ChungChi configurado.
 - **Use Key** permite retomar una key no usada y **Check UDID** consulta solamente los pedidos del usuario actual.
