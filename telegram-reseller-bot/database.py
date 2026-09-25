@@ -209,6 +209,12 @@ class Database:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS certificate_offer_media (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    photo_data BLOB NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS certificate_keys (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     key_code TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -279,6 +285,10 @@ class Database:
                 con.execute("ALTER TABLE products ADD COLUMN duration_days INTEGER NOT NULL DEFAULT 30")
             if "instructions" not in product_columns:
                 con.execute("ALTER TABLE products ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
+            if "name_html" not in product_columns:
+                con.execute("ALTER TABLE products ADD COLUMN name_html TEXT NOT NULL DEFAULT ''")
+            if "custom_emoji_id" not in product_columns:
+                con.execute("ALTER TABLE products ADD COLUMN custom_emoji_id TEXT NOT NULL DEFAULT ''")
 
             order_columns = {row["name"] for row in con.execute("PRAGMA table_info(orders)")}
             if "duration_days" not in order_columns:
@@ -380,6 +390,17 @@ class Database:
     def product_media(self, product_id: int) -> sqlite3.Row | None:
         with self.connect() as con:
             return con.execute("SELECT * FROM product_media WHERE product_id=?", (product_id,)).fetchone()
+
+    def set_certificate_offer_photo(self, data: bytes) -> None:
+        with self.transaction() as con:
+            con.execute("""INSERT INTO certificate_offer_media(id,photo_data,updated_at) VALUES(1,?,?)
+                           ON CONFLICT(id) DO UPDATE SET photo_data=excluded.photo_data,
+                           updated_at=excluded.updated_at""", (data, utcnow()))
+
+    def certificate_offer_photo(self) -> bytes | None:
+        with self.connect() as con:
+            row = con.execute("SELECT photo_data FROM certificate_offer_media WHERE id=1").fetchone()
+            return row["photo_data"] if row else None
 
     def reseller_ids(self) -> list[int]:
         with self.connect() as con:
@@ -511,14 +532,15 @@ class Database:
             ).fetchall()
 
     def create_product(self, name: str, price_cents: int, description: str = "", duration_days: int = 30,
-                       instructions: str = "") -> int:
+                       instructions: str = "", name_html: str = "", custom_emoji_id: str = "") -> int:
         if duration_days < 1 or duration_days > 3650:
             raise ValueError("Duración inválida")
         with self.transaction() as con:
             cur = con.execute(
-                """INSERT INTO products(name,description,price_cents,duration_days,instructions,created_at)
-                   VALUES(?,?,?,?,?,?)""",
-                (name.strip(), description.strip(), price_cents, duration_days, instructions.strip(), utcnow()),
+                """INSERT INTO products(name,description,price_cents,duration_days,instructions,name_html,custom_emoji_id,created_at)
+                   VALUES(?,?,?,?,?,?,?,?)""",
+                (name.strip(), description.strip(), price_cents, duration_days, instructions.strip(),
+                 name_html, custom_emoji_id, utcnow()),
             )
             return int(cur.lastrowid)
 
@@ -541,6 +563,12 @@ class Database:
             raise ValueError("Duración inválida")
         with self.transaction() as con:
             cur = con.execute(f"UPDATE products SET {field}=? WHERE id=?", (value, product_id))
+            return cur.rowcount == 1
+
+    def update_product_name(self, product_id: int, name: str, name_html: str, custom_emoji_id: str) -> bool:
+        with self.transaction() as con:
+            cur = con.execute("UPDATE products SET name=?,name_html=?,custom_emoji_id=? WHERE id=?",
+                              (name, name_html, custom_emoji_id, product_id))
             return cur.rowcount == 1
 
     def daily_announcement(self) -> sqlite3.Row | None:

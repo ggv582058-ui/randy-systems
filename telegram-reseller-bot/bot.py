@@ -17,8 +17,9 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, MessageEntity, ReplyKeyboardMarkup, Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from config import load_settings
@@ -140,6 +141,15 @@ def admin_menu(user):
 
 def money(cents: int) -> str:
     return f"${cents / 100:.2f}"
+
+
+def product_name_html(product) -> str:
+    return product["name_html"] or html.escape(product["name"])
+
+
+def custom_emoji_id(message) -> str:
+    return next((entity.custom_emoji_id for entity in (message.entities or ())
+                 if entity.type == MessageEntity.CUSTOM_EMOJI), "")
 
 
 def parse_amount(value: str) -> int:
@@ -300,7 +310,8 @@ async def access_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.effective_message.reply_text("⏳ Tu solicitud ya está pendiente.", reply_markup=PENDING_MENU)
 
 
-def product_buttons(prefix: str, active_only: bool = True, user_id: int | None = None) -> InlineKeyboardMarkup:
+def product_buttons(prefix: str, active_only: bool = True, user_id: int | None = None,
+                    custom_icons: bool = True) -> InlineKeyboardMarkup:
     rows = []
     products = db.products_for_user(user_id, active_only=active_only) if user_id else db.products(active_only=active_only)
     for p in products:
@@ -308,16 +319,51 @@ def product_buttons(prefix: str, active_only: bool = True, user_id: int | None =
         rows.append([InlineKeyboardButton(
             f"{p['name']} · {money(price)} · Stock {p['stock']}",
             callback_data=f"{prefix}:{p['id']}",
+            icon_custom_emoji_id=p["custom_emoji_id"] if prefix == "buy" and custom_icons and p["custom_emoji_id"] else None,
         )])
     return InlineKeyboardMarkup(rows or [[InlineKeyboardButton("Sin productos", callback_data="noop")]])
 
 
 async def show_buy(update: Update) -> None:
-    await update.effective_message.reply_text(
-        "🛒 <b>Selecciona un producto</b>",
-        reply_markup=product_buttons("buy", user_id=update.effective_user.id),
-        parse_mode=ParseMode.HTML,
-    )
+    try:
+        await update.effective_message.reply_text(
+            "🛒 <b>Selecciona un producto</b>",
+            reply_markup=product_buttons("buy", user_id=update.effective_user.id),
+            parse_mode=ParseMode.HTML,
+        )
+    except BadRequest as exc:
+        if "emoji" not in str(exc).lower() and "button" not in str(exc).lower():
+            raise
+        await update.effective_message.reply_text(
+            "🛒 <b>Selecciona un producto</b>",
+            reply_markup=product_buttons("buy", user_id=update.effective_user.id, custom_icons=False),
+            parse_mode=ParseMode.HTML,
+        )
+    for product in db.products_for_user(update.effective_user.id)[:10]:
+        media = db.product_media(product["id"])
+        if not media or not media["photo_data"]:
+            continue
+        photo = io.BytesIO(media["photo_data"])
+        photo.name = media["photo_name"] or "product.jpg"
+        try:
+            await update.effective_message.reply_photo(
+                photo,
+                caption=f"💎 <b>{product_name_html(product)}</b>\n💵 {money(product['effective_price_cents'])} · "
+                        f"⏳ {product['duration_days']} días · 🔑 Stock {product['stock']}",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Ver producto", callback_data=f"buy:{product['id']}")]]),
+            )
+        except BadRequest as exc:
+            if "emoji" not in str(exc).lower():
+                log.warning("No se pudo mostrar foto del producto %s: %s", product["id"], exc)
+                continue
+            photo.seek(0)
+            await update.effective_message.reply_photo(
+                photo, caption=f"💎 {product['name']} · {money(product['effective_price_cents'])}",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Ver producto", callback_data=f"buy:{product['id']}")]]),
+            )
+        except Exception as exc:
+            log.warning("No se pudo mostrar foto del producto %s: %s", product["id"], exc)
 
 
 async def show_products_admin(update: Update) -> None:
@@ -886,7 +932,14 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif admin_panel and user["role"] == "admin" and text in ("📎 Archivos", "📎 Files"):
         await begin_product_file(update)
     elif admin_panel and user["role"] == "admin" and text in ("🎨 Multimedia", "🎨 Media"):
-        await begin_product_media(update)
+        await update.effective_message.reply_text(
+            "🎨 <b>Fotos del catálogo</b>\nElige dónde quieres cambiar la foto:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📦 Foto de producto", callback_data="media:products")],
+                [InlineKeyboardButton("🍎 Portada del certificado", callback_data="certcover:upload")],
+            ]),
+        )
     elif admin_panel and user["role"] == "admin" and text in ("⚡ API Zentry", "⚡ Zentry API"):
         await begin_zentry_generate(update)
     elif admin_panel and user["role"] == "admin" and text in ("➕ Crear socio", "➕ Create partner"):
@@ -1221,14 +1274,33 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return True
 
     if flow["name"] == "product_photo":
-        if not message.photo:
-            await message.reply_text("❌ Envía una foto de Telegram.")
+        if not message.photo and not (message.document and message.document.mime_type in ("image/jpeg", "image/png")):
+            await message.reply_text("❌ Envía una foto o un archivo JPG/PNG.")
             return True
-        tg_file = await context.bot.get_file(message.photo[-1].file_id)
+        photo_info = message.photo[-1] if message.photo else message.document
+        if photo_info.file_size and photo_info.file_size > 10 * 1024 * 1024:
+            await message.reply_text("❌ La imagen no puede superar 10 MB.")
+            return True
+        tg_file = await context.bot.get_file(photo_info.file_id)
         data = bytes(await tg_file.download_as_bytearray())
-        db.set_product_photo(flow["product_id"], data)
+        filename = "product.png" if message.document and message.document.mime_type == "image/png" else "product.jpg"
+        db.set_product_photo(flow["product_id"], data, filename)
         context.user_data.pop("flow", None)
-        await message.reply_text("✅ Foto profesional guardada para el producto.", reply_markup=ADMIN_MENU)
+        await message.reply_text("✅ Portada guardada. Ya aparece en 🛒 Comprar keys y al abrir el producto.", reply_markup=ADMIN_MENU)
+        return True
+
+    if flow["name"] == "certificate_cover_photo":
+        if not message.photo and not (message.document and message.document.mime_type in ("image/jpeg", "image/png")):
+            await message.reply_text("❌ Envía una foto o un archivo JPG/PNG.")
+            return True
+        photo_info = message.photo[-1] if message.photo else message.document
+        if photo_info.file_size and photo_info.file_size > 10 * 1024 * 1024:
+            await message.reply_text("❌ La imagen no puede superar 10 MB.")
+            return True
+        tg_file = await context.bot.get_file(photo_info.file_id)
+        db.set_certificate_offer_photo(bytes(await tg_file.download_as_bytearray()))
+        context.user_data.pop("flow", None)
+        await message.reply_text("✅ Foto del certificado guardada. Aparecerá al tocar 🍎 Certificado iOS.", reply_markup=ADMIN_MENU)
         return True
 
     if flow["name"] == "product_sticker":
@@ -1383,25 +1455,31 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             elif field == "duration_days":
                 value = int(text)
             elif field == "name":
-                value = text.strip()[:100]
-                if len(value) < 2:
-                    raise ValueError("Nombre demasiado corto")
+                value = text.strip()
+                if not 2 <= len(value) <= 100:
+                    raise ValueError("El nombre debe tener de 2 a 100 caracteres")
             else:
                 value = "" if text == "-" else text[:1500 if field == "instructions" else 500]
-            if not db.update_product(product_id, field, value):
+            if field == "name":
+                saved = db.update_product_name(product_id, value, message.text_html or html.escape(value), custom_emoji_id(message))
+            else:
+                saved = db.update_product(product_id, field, value)
+            if not saved:
                 raise ValueError("Producto no encontrado")
         except (ValueError, TypeError) as exc:
             await message.reply_text(f"❌ {html.escape(str(exc))}. Inténtalo otra vez.")
             return True
         context.user_data.pop("flow", None)
-        await message.reply_text("✅ Producto actualizado sin borrar sus keys, archivos ni precios por socio.", reply_markup=ADMIN_MENU)
+        await message.reply_text("✅ Producto actualizado sin borrar sus keys, archivos ni precios por socio. Reabre 🛒 Comprar keys para ver la lista nueva.", reply_markup=ADMIN_MENU)
         return True
 
     if flow["name"] == "product_name":
-        if len(text) < 2:
-            await message.reply_text("Escribe un nombre válido.")
+        if not 2 <= len(text) <= 100:
+            await message.reply_text("Escribe un nombre de 2 a 100 caracteres.")
             return True
-        flow["name"], flow["product_name"] = "product_price", text[:100]
+        flow["name"], flow["product_name"] = "product_price", text
+        flow["product_name_html"] = message.text_html or html.escape(text)
+        flow["custom_emoji_id"] = custom_emoji_id(message)
         await message.reply_text("💵 Escribe el precio de venta. Ejemplo: 14.99")
         return True
 
@@ -1440,7 +1518,8 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if flow["name"] == "product_instructions":
         instructions = "Activa tu key siguiendo las instrucciones incluidas con el archivo." if text == "-" else text[:1500]
         product_id = db.create_product(
-            flow["product_name"], flow["price_cents"], flow["description"], flow["duration_days"], instructions
+            flow["product_name"], flow["price_cents"], flow["description"], flow["duration_days"], instructions,
+            flow.get("product_name_html", ""), flow.get("custom_emoji_id", ""),
         )
         context.user_data.pop("flow", None)
         await message.reply_text(
@@ -1676,6 +1755,31 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 pass
         return
 
+    if data in ("media:products", "certcover:upload"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        await query.answer()
+        if data == "media:products":
+            await begin_product_media(update)
+        else:
+            context.user_data["flow"] = {"name": "certificate_cover_photo"}
+            await query.message.reply_text("🍎 Envía la portada del certificado como foto o archivo JPG/PNG.")
+        return
+
+    if data.startswith("product:photo:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        product_id = int(data.rsplit(":", 1)[1])
+        if not db.product(product_id):
+            await query.answer("Producto no encontrado", show_alert=True)
+            return
+        await query.answer()
+        context.user_data["flow"] = {"name": "product_photo", "product_id": product_id}
+        await query.message.reply_text(f"📷 Envía la nueva portada del producto #{product_id} como foto o JPG/PNG.")
+        return
+
     if data.startswith("announcement:"):
         if not admin_panel or not is_admin(query.from_user.id):
             await query.answer("Solo Admin", show_alert=True)
@@ -1720,13 +1824,13 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.answer("Producto no encontrado", show_alert=True)
             return
         await query.answer()
-        fields = (("📦 Nombre / emojis", "name"), ("💵 Precio", "price_cents"),
+        fields = (("📦 Nombre / emojis", "name"), ("📷 Foto", "photo"), ("💵 Precio", "price_cents"),
                   ("⏳ Duración", "duration_days"), ("📝 Descripción", "description"),
                   ("📋 Instrucciones", "instructions"))
         await query.message.reply_text(
             f"✏️ <b>Editar #{product_id}</b> · {html.escape(product['name'])}\nSelecciona un campo:",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=f"product:editfield:{product_id}:{field}")]
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=f"product:photo:{product_id}" if field == "photo" else f"product:editfield:{product_id}:{field}")]
                                              for label, field in fields]),
         )
         return
@@ -1912,7 +2016,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ]])
         caption = (
             "💎 <b>PRODUCTO DIGITAL</b>\n━━━━━━━━━━━━━━━━━━\n"
-            f"📦 <b>{html.escape(p['name'])}</b>\n"
+            f"📦 <b>{product_name_html(p)}</b>\n"
             f"💵 Precio socio: <b>{money(p['effective_price_cents'])}</b>\n"
             f"⏳ Duración: <b>{p['duration_days']} días</b>\n"
             f"🔑 Stock disponible: <b>{p['stock']}</b>\n"
@@ -1930,9 +2034,22 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if media and media["photo_data"]:
             photo = io.BytesIO(media["photo_data"])
             photo.name = media["photo_name"] or "product.jpg"
-            await query.message.reply_photo(photo, caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
+            try:
+                await query.message.reply_photo(photo, caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
+            except BadRequest as exc:
+                if "emoji" not in str(exc).lower():
+                    raise
+                photo.seek(0)
+                await query.message.reply_photo(photo, caption=caption.replace(product_name_html(p), html.escape(p["name"])),
+                                                reply_markup=keys, parse_mode=ParseMode.HTML)
         else:
-            await query.message.reply_text(caption, reply_markup=keys, parse_mode=ParseMode.HTML)
+            try:
+                await query.message.reply_text(caption, reply_markup=keys, parse_mode=ParseMode.HTML)
+            except BadRequest as exc:
+                if "emoji" not in str(exc).lower():
+                    raise
+                await query.message.reply_text(caption.replace(product_name_html(p), html.escape(p["name"])),
+                                               reply_markup=keys, parse_mode=ParseMode.HTML)
         return
 
     if data.startswith("confirm:"):

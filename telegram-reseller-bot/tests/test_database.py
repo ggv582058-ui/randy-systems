@@ -35,6 +35,18 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(row["name"], "💎 Producto :D")
         self.assertEqual(row["effective_price_cents"], 350)
 
+    def test_custom_emoji_and_photos_survive_database_restart(self):
+        markup = 'Randy <tg-emoji emoji-id="12345">📍</tg-emoji> Mod'
+        self.assertTrue(self.db.update_product_name(self.product, "Randy 📍 Mod", markup, "12345"))
+        self.db.set_product_photo(self.product, b"photo-bytes")
+        self.db.set_certificate_offer_photo(b"certificate-photo")
+        reopened = Database(self.db.path)
+        reopened.initialize()
+        self.assertEqual(reopened.product(self.product)["name_html"], markup)
+        self.assertEqual(reopened.product(self.product)["custom_emoji_id"], "12345")
+        self.assertEqual(reopened.product_media(self.product)["photo_data"], b"photo-bytes")
+        self.assertEqual(reopened.certificate_offer_photo(), b"certificate-photo")
+
     def test_daily_announcement_claims_once_and_survives_restart(self):
         self.db.set_daily_announcement("💎 Hola :D", "10:30")
         self.assertIsNone(self.db.claim_daily_announcement("2026-09-25", "10:29"))

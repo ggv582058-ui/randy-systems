@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
+import io
 import os
 import sqlite3
 
@@ -141,7 +142,7 @@ async def show_certificate_offer(update):
         InlineKeyboardButton("✅ Comprar certificado", callback_data="cert:confirm"),
         InlineKeyboardButton("❌ Cancelar", callback_data="cancel"),
     ]])
-    await loading.edit_text(
+    offer = (
         "🤖🍎 <b>RANDY CERTIFICATE SYSTEM</b>\n"
         "<code>secure.purchase.module = READY</code>\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -150,10 +151,20 @@ async def show_certificate_offer(update):
         f"🛡️ Garantía: <b>{html.escape(str(plan.get('warranty') or 'según el plan'))}</b>\n"
         "📦 Incluye <code>.p12</code> + <code>.mobileprovision</code> + entrega web privada.\n\n"
         "🔵 Después del pago registrarás tu <b>UDID</b> y podrás consultar el certificado siempre desde <b>💠 Tu certificado</b>.\n\n"
-        "El costo se descontará de tu saldo del bot.",
-        reply_markup=keys,
-        parse_mode=ParseMode.HTML,
+        "El costo se descontará de tu saldo del bot."
     )
+    cover = bot.db.certificate_offer_photo()
+    if cover:
+        await loading.delete()
+        photo = io.BytesIO(cover)
+        photo.name = "certificate.jpg"
+        try:
+            await update.effective_message.reply_photo(photo, caption=offer, reply_markup=keys, parse_mode=ParseMode.HTML)
+        except Exception as exc:
+            bot.log.warning("No se pudo mostrar portada del certificado: %s", exc)
+            await update.effective_message.reply_text(offer, reply_markup=keys, parse_mode=ParseMode.HTML)
+    else:
+        await loading.edit_text(offer, reply_markup=keys, parse_mode=ParseMode.HTML)
 
 
 _original_callback = bot.callback
