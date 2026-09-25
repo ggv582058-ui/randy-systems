@@ -73,7 +73,7 @@ async def show_my_certificates(update, context) -> None:
     )
 
     for row in rows[:5]:
-        current = row
+        current = bot.db.renew_certificate_link(row["id"], user_id, bot.settings.certificate_link_ttl_hours) or row
         if row["provider_order_code"] and row["status"] not in ("completed", "failed", "cancelled"):
             try:
                 await bot.refresh_certificate_order(context.bot, row)
@@ -117,30 +117,31 @@ async def show_certificate_offer(update):
             "⚠️ Certificados temporalmente no disponibles. Falta configurar el API en Render."
         )
         return
+    loading = await update.effective_message.reply_text("🔄 Consultando disponibilidad del certificado…")
     try:
         plans, balance = await asyncio.gather(
             asyncio.to_thread(bot.chungchi.plans), asyncio.to_thread(bot.chungchi.balance)
         )
     except ChungChiError as exc:
-        await update.effective_message.reply_text(
+        await loading.edit_text(
             f"⚠️ No pude verificar ChungChi: {html.escape(str(exc))}", parse_mode=ParseMode.HTML
         )
         return
     plan = next((p for p in plans if int(p.get("id", -1)) == bot.settings.chungchi_plan_id), None)
     if not plan:
-        await update.effective_message.reply_text("⚠️ El plan configurado no está disponible en ChungChi.")
+        await loading.edit_text("⚠️ El plan configurado no está disponible en ChungChi.")
         return
     provider_balance = float(balance.get("wallet", 0) or 0)
     provider_cost = float(plan.get("amount", 0) or 0)
     if provider_balance < provider_cost:
-        await update.effective_message.reply_text("⚠️ Certificados agotados temporalmente. Contacta al soporte.")
+        await loading.edit_text("⚠️ Certificados agotados temporalmente. Contacta al soporte.")
         return
     price = certificate_price(update.effective_user.id)
     keys = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Comprar certificado", callback_data="cert:confirm"),
         InlineKeyboardButton("❌ Cancelar", callback_data="cancel"),
     ]])
-    await update.effective_message.reply_text(
+    await loading.edit_text(
         "🤖🍎 <b>RANDY CERTIFICATE SYSTEM</b>\n"
         "<code>secure.purchase.module = READY</code>\n"
         "━━━━━━━━━━━━━━━━━━\n"

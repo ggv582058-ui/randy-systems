@@ -11,6 +11,7 @@ import re
 import secrets
 import signal
 import sqlite3
+import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -38,6 +39,9 @@ zentry = ZentryClient(
     settings.zentry_seller_secret,
 )
 chungchi = ChungChiClient(settings.chungchi_base_url, settings.chungchi_api_key)
+_delivery_in_progress: set[int] = set()
+_delivery_retry_after: dict[int, float] = {}
+_delivery_notice_sent: set[int] = set()
 
 
 ADMIN_MENU = ReplyKeyboardMarkup(
@@ -563,6 +567,10 @@ def certificate_status_text(order) -> str:
 async def deliver_certificate(bot, order) -> None:
     if order["status"] != "completed" or not order["download_url"]:
         return
+    order_id = order["id"]
+    if order_id in _delivery_in_progress or time.monotonic() < _delivery_retry_after.get(order_id, 0):
+        return
+    _delivery_in_progress.add(order_id)
     base_url = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
     install_url = f"{base_url}/certificate/install/{order['install_token']}"
     keys = InlineKeyboardMarkup([[InlineKeyboardButton("📲 Instalar certificado", url=install_url)]])
@@ -582,13 +590,22 @@ async def deliver_certificate(bot, order) -> None:
             parse_mode=ParseMode.HTML,
         )
         db.mark_certificate_delivered(order["id"])
+        _delivery_retry_after.pop(order_id, None)
     except Exception as exc:
         log.warning("No se pudo enviar el ZIP del certificado %s: %s", order["id"], exc)
-        await bot.send_message(
-            order["user_id"],
-            "✅ Tu certificado está listo. Usa el botón privado para descargarlo.",
-            reply_markup=keys,
-        )
+        _delivery_retry_after[order_id] = time.monotonic() + 90
+        if order_id not in _delivery_notice_sent:
+            _delivery_notice_sent.add(order_id)
+            try:
+                await bot.send_message(
+                    order["user_id"],
+                    "✅ Tu certificado está listo. Usa el enlace privado mientras reintento enviarte el ZIP.",
+                    reply_markup=keys,
+                )
+            except Exception:
+                log.warning("No se pudo notificar la entrega alternativa del pedido %s", order_id)
+    finally:
+        _delivery_in_progress.discard(order_id)
 
 
 async def submit_certificate_order(message, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
@@ -608,7 +625,13 @@ async def submit_certificate_order(message, context: ContextTypes.DEFAULT_TYPE, 
         await message.reply_text(f"❌ {html.escape(str(exc))}", parse_mode=ParseMode.HTML)
         return
     context.user_data.pop("certificate_pending", None)
-    status_message = await message.reply_text("⏳ Enviando tu pedido de certificado…")
+    base_url = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    status_link = f"{base_url}/certificate/install/{install_token}"
+    status_buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Ver estado privado", url=status_link)]]) if base_url.startswith("https://") else None
+    status_message = await message.reply_text(
+        "⏳ Registrando el pedido con ChungChi. Puedes ver el estado aquí mientras se prepara.",
+        reply_markup=status_buttons,
+    )
     try:
         provider = await asyncio.to_thread(
             chungchi.create_order, settings.chungchi_plan_id, flow["udid"], flow["device"], flow["p12_password"]
@@ -622,7 +645,7 @@ async def submit_certificate_order(message, context: ContextTypes.DEFAULT_TYPE, 
         else:
             await status_message.edit_text("⚠️ ChungChi no confirmó el pedido. Lo dejé en verificación para evitar un cobro duplicado.")
         return
-    await status_message.edit_text(certificate_status_text(order), parse_mode=ParseMode.HTML)
+    await status_message.edit_text(certificate_status_text(order), parse_mode=ParseMode.HTML, reply_markup=status_buttons)
     if order["status"] == "completed":
         await deliver_certificate(context.bot, order)
 
@@ -972,6 +995,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             )
             return True
         for row in rows[:5]:
+            row = db.renew_certificate_link(row["id"], message.from_user.id, settings.certificate_link_ttl_hours)
             if row["provider_order_code"] and row["status"] not in ("completed", "failed", "cancelled"):
                 await refresh_certificate_order(context.bot, row)
                 row = db.certificate_order(row["id"], message.from_user.id)
@@ -2047,10 +2071,19 @@ async def process_certificate_webhook(bot, payload: dict) -> None:
 async def certificate_poll_loop(bot, stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         if chungchi.configured:
-            for row in db.pending_certificate_orders():
-                await refresh_certificate_order(bot, row)
+            rows = db.pending_certificate_orders(limit=20)
+            semaphore = asyncio.Semaphore(4)
+
+            async def refresh(row):
+                async with semaphore:
+                    await refresh_certificate_order(bot, row)
+
+            results = await asyncio.gather(*(refresh(row) for row in rows), return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    log.error("No se pudo consultar un certificado pendiente: %s", result)
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=60)
+            await asyncio.wait_for(stop_event.wait(), timeout=15)
         except asyncio.TimeoutError:
             pass
 
@@ -2151,7 +2184,8 @@ async def run_bots() -> None:
                 else:
                     log.warning("ChungChi no devolvió el secreto del webhook")
             except ChungChiError as exc:
-                log.warning("No se pudo configurar webhook ChungChi: %s", exc)
+                log.warning("No se pudo configurar webhook ChungChi (HTTP %s, código %s): %s. Se usará consulta periódica.",
+                            exc.status, exc.code or "sin código", exc)
 
         def certificate_lookup(token: str):
             row = db.install_order(token)

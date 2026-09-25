@@ -18,7 +18,7 @@ Dos bots de Telegram conectados al mismo inventario: uno privado para el Admin y
 - Webhook opcional para conectar compras con un API externo.
 - Integración Seller API de ZentryAuth para generar hasta 100 keys por lote, consultar, resetear HWID y bloquear/desbloquear licencias desde el bot Admin.
 - Venta automática de certificados iOS mediante ChungChi: key interna de un uso, captura de UDID, iPhone/iPad, contraseña P12 y nombre personalizado.
-- Webhook ChungChi firmado con HMAC, consulta de respaldo cada minuto y entrega automática del ZIP.
+- Webhook ChungChi firmado con HMAC y consulta de respaldo cada 15 segundos en lotes; si el proveedor rechaza el webhook, el bot sigue consultando pedidos y entrega el ZIP cuando aparece. El comprador recibe un enlace privado de estado de inmediato.
 - Página privada y temporal para descargar o compartir el `.p12` y `.mobileprovision` con Feather, GBox, Scarlet o Archivos.
 - Historial contable, órdenes y estadísticas.
 - Compra y aprobación transaccionales para evitar cobrar o entregar dos veces.

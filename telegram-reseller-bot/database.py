@@ -886,8 +886,8 @@ class Database:
             )
             if status == "completed":
                 con.execute(
-                    "UPDATE certificate_orders SET completed_at=COALESCE(completed_at,?) WHERE id=?",
-                    (utcnow(), order_id),
+                    "UPDATE certificate_orders SET completed_at=COALESCE(completed_at,?), install_expires_at=? WHERE id=?",
+                    (utcnow(), (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(timespec="seconds"), order_id),
                 )
                 con.execute(
                     """UPDATE certificate_keys SET status='used' WHERE id=(
@@ -904,10 +904,15 @@ class Database:
                 return None
             status = str(provider.get("status") or row["status"]).lower()
             completed_at = provider.get("completed_at") or (utcnow() if status == "completed" else row["completed_at"])
+            expires_at = row["install_expires_at"]
+            if status == "completed" and row["status"] != "completed":
+                expires_at = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(timespec="seconds")
             con.execute(
                 """UPDATE certificate_orders SET status=?,download_url=COALESCE(?,download_url),
-                   p12_password=COALESCE(?,p12_password),completed_at=?,last_error='',updated_at=? WHERE id=?""",
-                (status, provider.get("download_url"), provider.get("p12_password"), completed_at, utcnow(), row["id"]),
+                   p12_password=COALESCE(?,p12_password),completed_at=?,install_expires_at=?,
+                   last_error='',updated_at=? WHERE id=?""",
+                (status, provider.get("download_url"), provider.get("p12_password"), completed_at,
+                 expires_at, utcnow(), row["id"]),
             )
             if status == "completed":
                 con.execute("UPDATE certificate_keys SET status='used' WHERE id=?", (row["certificate_key_id"],))
@@ -940,6 +945,14 @@ class Database:
                 "SELECT * FROM certificate_orders WHERE id=? AND user_id=?", (order_id, user_id)
             ).fetchone()
 
+    def renew_certificate_link(self, order_id: int, user_id: int, hours: int = 24) -> sqlite3.Row | None:
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat(timespec="seconds")
+        with self.transaction() as con:
+            con.execute("UPDATE certificate_orders SET install_expires_at=? WHERE id=? AND user_id=?",
+                        (expires_at, order_id, user_id))
+            return con.execute("SELECT * FROM certificate_orders WHERE id=? AND user_id=?",
+                               (order_id, user_id)).fetchone()
+
     def certificate_order_by_code(self, order_code: str) -> sqlite3.Row | None:
         with self.connect() as con:
             return con.execute(
@@ -961,7 +974,9 @@ class Database:
         with self.connect() as con:
             return con.execute(
                 """SELECT * FROM certificate_orders
-                   WHERE provider_order_code IS NOT NULL AND status IN ('pending','processing','review','submitting')
+                   WHERE provider_order_code IS NOT NULL AND (
+                       status IN ('pending','processing','review','submitting')
+                       OR (status='completed' AND (download_url IS NULL OR delivered_at IS NULL)))
                    ORDER BY updated_at LIMIT ?""", (limit,)
             ).fetchall()
 

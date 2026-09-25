@@ -201,6 +201,30 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(self.db.certificate_key(2, issued["key_code"])["status"], "available")
         self.assertEqual(self.db.user(2)["balance_cents"], 650)
 
+    def test_completed_certificate_waits_for_download_and_extends_private_link(self):
+        self.credit(1000)
+        issued = self.db.buy_certificate_key(2, "CERT-LINK-READY-TEST", 350)
+        old_expiry = (datetime.now(timezone.utc) + timedelta(minutes=2)).isoformat()
+        local = self.db.create_certificate_order(
+            2, issued["key_code"], 23, "00008110-001C0CAE2101801E", "iphone",
+            "1", "Randy Test", "private-token", old_expiry,
+        )
+        self.db.attach_provider_order(local["id"], {"order_code": "LATE-ZIP", "status": "pending"})
+        incomplete = self.db.update_certificate_order("LATE-ZIP", {"status": "completed"})
+        self.assertIsNone(incomplete["download_url"])
+        self.assertGreater(datetime.fromisoformat(incomplete["install_expires_at"]),
+                           datetime.now(timezone.utc) + timedelta(hours=23))
+        self.assertIn(local["id"], [row["id"] for row in self.db.pending_certificate_orders()])
+        ready = self.db.update_certificate_order("LATE-ZIP", {
+            "status": "completed", "download_url": "https://chungchi.store/storage/cert.zip",
+        })
+        self.assertEqual(ready["status"], "completed")
+        self.db.mark_certificate_delivered(local["id"])
+        self.assertNotIn(local["id"], [row["id"] for row in self.db.pending_certificate_orders()])
+        reopened = self.db.renew_certificate_link(local["id"], 2)
+        self.assertGreater(datetime.fromisoformat(reopened["install_expires_at"]),
+                           datetime.now(timezone.utc) + timedelta(hours=23))
+
 
 if __name__ == "__main__":
     unittest.main()
