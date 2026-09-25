@@ -84,6 +84,14 @@ USER_MENU_EN = ReplyKeyboardMarkup(
 )
 CERTIFICATE_MENU = ReplyKeyboardMarkup(
     [[KeyboardButton("👋 Welcome!")],
+     [KeyboardButton("🍎 Certificado iOS")],
+     [KeyboardButton("🔍 Check UDID"), KeyboardButton("🔑 Use Key")],
+     [KeyboardButton("⚙️ Settings")]],
+    resize_keyboard=True,
+)
+CERTIFICATE_MENU_EN = ReplyKeyboardMarkup(
+    [[KeyboardButton("👋 Welcome!")],
+     [KeyboardButton("🍎 iOS Certificate")],
      [KeyboardButton("🔍 Check UDID"), KeyboardButton("🔑 Use Key")],
      [KeyboardButton("⚙️ Settings")]],
     resize_keyboard=True,
@@ -108,6 +116,10 @@ def is_vip_row(user) -> bool:
 
 def user_menu(language: str):
     return USER_MENU_EN if language == "en" else USER_MENU
+
+
+def certificate_menu(language: str):
+    return CERTIFICATE_MENU_EN if language == "en" else CERTIFICATE_MENU
 
 
 def pending_menu(language: str):
@@ -492,16 +504,45 @@ async def begin_certificate_key(update: Update, context: ContextTypes.DEFAULT_TY
             return
         context.user_data["flow"] = {"name": "certificate_udid", "certificate_key": row["key_code"]}
         await update.effective_message.reply_text(
-            "📱 Envía el <b>UDID</b> del iPhone o iPad.", parse_mode=ParseMode.HTML, reply_markup=CERTIFICATE_MENU
+            "📱 Envía el <b>UDID</b> del iPhone o iPad.", parse_mode=ParseMode.HTML,
+            reply_markup=certificate_menu(language_of(current_user(update)))
         )
         return
     context.user_data["flow"] = {"name": "certificate_key"}
-    await update.effective_message.reply_text("🔑 Envía tu key de certificado:", reply_markup=CERTIFICATE_MENU)
+    await update.effective_message.reply_text(
+        "🔑 Envía tu key de certificado:", reply_markup=certificate_menu(language_of(current_user(update)))
+    )
 
 
 async def begin_udid_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["flow"] = {"name": "certificate_lookup_udid"}
-    await update.effective_message.reply_text("🔍 Envía el UDID que deseas consultar:", reply_markup=CERTIFICATE_MENU)
+    await update.effective_message.reply_text(
+        "🔍 Envía el UDID que deseas consultar:", reply_markup=certificate_menu(language_of(current_user(update)))
+    )
+
+
+async def show_certificate_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, language: str) -> None:
+    context.user_data.pop("flow", None)
+    context.user_data.pop("certificate_pending", None)
+    if language == "en":
+        message = (
+            "👋 <b>Welcome to Randy Certificates</b>\n━━━━━━━━━━━━━━━━━━\n"
+            "🍎 <b>iOS Certificate:</b> buy a certificate key.\n"
+            "🔑 <b>Use Key:</b> enter an unused key and your device UDID.\n"
+            "🔍 <b>Check UDID:</b> see the status of your orders.\n\n"
+            "Choose an option below to get started."
+        )
+    else:
+        message = (
+            "👋 <b>Bienvenido a Randy Certificates</b>\n━━━━━━━━━━━━━━━━━━\n"
+            "🍎 <b>Certificado iOS:</b> compra tu key.\n"
+            "🔑 <b>Use Key:</b> ingresa una key sin usar y el UDID de tu dispositivo.\n"
+            "🔍 <b>Check UDID:</b> consulta el estado de tus pedidos.\n\n"
+            "Elige una opción de abajo para comenzar."
+        )
+    await update.effective_message.reply_text(
+        message, parse_mode=ParseMode.HTML, reply_markup=certificate_menu(language)
+    )
 
 
 def certificate_status_text(order) -> str:
@@ -762,27 +803,42 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context.user_data["flow"] = {"name": "partner_login"}
         await update.effective_message.reply_text("👤 Escribe el usuario que te dio el Admin:")
         return
+    # Certificate menu buttons must be processed before handle_flow. Otherwise
+    # an active UDID/key prompt consumes them as input and the menu seems broken.
+    if not admin_panel and user["role"] in ("reseller", "admin"):
+        if text == "👋 Welcome!":
+            await show_certificate_welcome(update, context, language_of(user))
+            return
+        if text in ("🍎 Certificado iOS", "🍎 iOS Certificate"):
+            context.user_data.pop("flow", None)
+            context.user_data.pop("certificate_pending", None)
+            await show_certificate_offer(update)
+            return
+        if text == "🔑 Use Key":
+            context.user_data.pop("certificate_pending", None)
+            await begin_certificate_key(update, context)
+            return
+        if text == "🔍 Check UDID":
+            context.user_data.pop("certificate_pending", None)
+            await begin_udid_lookup(update, context)
+            return
+        if text == "⚙️ Settings":
+            context.user_data.pop("flow", None)
+            keys = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🌐 Idioma", callback_data="certsettings:language"),
+                InlineKeyboardButton("👤 Mi cuenta", callback_data="certsettings:account"),
+            ]])
+            await update.effective_message.reply_text(
+                "⚙️ <b>Settings</b>", reply_markup=keys, parse_mode=ParseMode.HTML
+            )
+            return
     if await handle_flow(update, context):
         return
     if user["role"] not in ("reseller", "admin"):
         await send_home(update, context)
         return
 
-    if not admin_panel and text in ("🍎 Certificado iOS", "🍎 iOS Certificate"):
-        await show_certificate_offer(update)
-    elif not admin_panel and text == "🔑 Use Key":
-        await begin_certificate_key(update, context)
-    elif not admin_panel and text == "🔍 Check UDID":
-        await begin_udid_lookup(update, context)
-    elif not admin_panel and text == "⚙️ Settings":
-        keys = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🌐 Idioma", callback_data="certsettings:language"),
-            InlineKeyboardButton("👤 Mi cuenta", callback_data="certsettings:account"),
-        ]])
-        await update.effective_message.reply_text("⚙️ <b>Settings</b>", reply_markup=keys, parse_mode=ParseMode.HTML)
-    elif not admin_panel and text == "👋 Welcome!":
-        await send_home(update, context)
-    elif not admin_panel and text in ("🛒 Comprar keys", "🛒 Buy keys"):
+    if not admin_panel and text in ("🛒 Comprar keys", "🛒 Buy keys"):
         await show_buy(update)
     elif not admin_panel and text in ("💳 Recargar saldo", "💳 Add balance"):
         await begin_topup(update, context)
@@ -899,7 +955,10 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         rows = db.certificate_orders_for_user(message.from_user.id, text.upper())
         context.user_data.pop("flow", None)
         if not rows:
-            await message.reply_text("🔍 No encontré certificados tuyos para ese UDID.", reply_markup=CERTIFICATE_MENU)
+            await message.reply_text(
+                "🔍 No encontré certificados tuyos para ese UDID.",
+                reply_markup=certificate_menu(language_of(current_user(update))),
+            )
             return True
         for row in rows[:5]:
             if row["provider_order_code"] and row["status"] not in ("completed", "failed", "cancelled"):
@@ -1375,7 +1434,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"🔑 Key: <code>{issued['key_code']}</code>\n"
             f"💰 Saldo restante: <b>{money(issued['balance_cents'])}</b>\n\n"
             "La key se activó para iniciar tu certificado.",
-            reply_markup=CERTIFICATE_MENU,
+            reply_markup=certificate_menu(language_of(user)),
             parse_mode=ParseMode.HTML,
         )
         context.user_data["flow"] = {"name": "certificate_udid", "certificate_key": issued["key_code"]}
