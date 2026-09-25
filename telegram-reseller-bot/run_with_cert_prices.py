@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
+import os
 import sqlite3
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 
 import bot
@@ -27,6 +28,87 @@ def certificate_price(user_id: int) -> int:
         except (TypeError, ValueError):
             pass
     return bot.settings.chungchi_sell_price_cents
+
+
+def _install_url(row) -> str:
+    base_url = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    token = str(row["install_token"] or "")
+    if not base_url.startswith("https://") or not token:
+        return ""
+    return f"{base_url}/certificate/install/{token}"
+
+
+def _status_label(status: str) -> str:
+    labels = {
+        "completed": "✅ FIRMADO",
+        "processing": "🔵 PROCESANDO",
+        "pending": "🟦 PENDIENTE",
+        "submitting": "🧬 REGISTRANDO",
+        "review": "🛡️ EN REVISIÓN",
+        "failed": "🔴 REVISIÓN REQUERIDA",
+        "cancelled": "⚫ CANCELADO",
+    }
+    return labels.get((status or "").lower(), (status or "Pendiente").upper())
+
+
+async def show_my_certificates(update, context) -> None:
+    message = update.effective_message
+    user_id = update.effective_user.id
+    rows = bot.db.certificate_orders_for_user(user_id, limit=10)
+    if not rows:
+        await message.reply_text(
+            "💠 <b>TU CERTIFICADO</b>\n━━━━━━━━━━━━━━━━━━\n"
+            "Todavía no tienes certificados registrados.\n\n"
+            "Compra uno desde <b>🍎 Certificado iOS</b> y aparecerá aquí permanentemente.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=bot.certificate_menu(bot.language_of(bot.current_user(update))),
+        )
+        return
+
+    await message.reply_text(
+        "🤖💠 <b>RANDY CERTIFICATE CORE</b>\n"
+        "<code>secure.device.registry = ONLINE</code>\n"
+        "Aquí quedan guardados tus certificados comprados.",
+        parse_mode=ParseMode.HTML,
+    )
+
+    for row in rows[:5]:
+        current = row
+        if row["provider_order_code"] and row["status"] not in ("completed", "failed", "cancelled"):
+            try:
+                await bot.refresh_certificate_order(context.bot, row)
+                current = bot.db.certificate_order(row["id"], user_id) or row
+            except Exception:
+                current = row
+
+        status = _status_label(str(current["status"] or "pending"))
+        device = str(current["device"] or "iphone").replace("iphone", "iPhone").replace("ipad", "iPad")
+        created = bot.format_date(current["created_at"]) if current["created_at"] else "Pendiente"
+        password = html.escape(str(current["p12_password"] or "Pendiente"))
+        name = html.escape(str(current["display_name"] or "Randy Certificate"))
+        udid = html.escape(str(current["udid"] or "Pendiente"))
+        plan = html.escape(str(current["plan_id"] or "—"))
+        order_code = html.escape(str(current["provider_order_code"] or "Preparando"))
+        url = _install_url(current)
+        buttons = None
+        if url:
+            label = "🌐 Abrir entrega privada" if current["status"] == "completed" else "🌐 Ver estado en la web"
+            buttons = InlineKeyboardMarkup([[InlineKeyboardButton(label, url=url)]])
+
+        await message.reply_text(
+            "╭─ <b>💎 CERTIFICADO DIGITAL</b>\n"
+            f"├ 🤖 Estado: <b>{status}</b>\n"
+            f"├ 👤 Nombre: <b>{name}</b>\n"
+            f"├ 🆔 UDID: <code>{udid}</code>\n"
+            f"├ 📱 Dispositivo: <b>{html.escape(device)}</b>\n"
+            f"├ 🧬 Plan: <b>#{plan}</b>\n"
+            f"├ 🗓️ Registrado: <b>{html.escape(created)}</b>\n"
+            f"├ 🛡️ Garantía: <b>activa según el plan</b>\n"
+            f"├ 🔐 P12: <code>{password}</code>\n"
+            f"╰ 🛰️ Orden: <code>{order_code}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=buttons,
+        )
 
 
 async def show_certificate_offer(update):
@@ -55,15 +137,18 @@ async def show_certificate_offer(update):
         return
     price = certificate_price(update.effective_user.id)
     keys = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Comprar", callback_data="cert:confirm"),
+        InlineKeyboardButton("✅ Comprar certificado", callback_data="cert:confirm"),
         InlineKeyboardButton("❌ Cancelar", callback_data="cancel"),
     ]])
     await update.effective_message.reply_text(
-        "🍎 <b>CERTIFICADO iOS</b>\n━━━━━━━━━━━━━━━━━━\n"
+        "🤖🍎 <b>RANDY CERTIFICATE SYSTEM</b>\n"
+        "<code>secure.purchase.module = READY</code>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
         f"💵 Precio: <b>{bot.money(price)}</b>\n"
         f"📅 Validez: <b>{html.escape(str(plan.get('validity') or '12 meses'))}</b>\n"
         f"🛡️ Garantía: <b>{html.escape(str(plan.get('warranty') or 'según el plan'))}</b>\n"
-        "📦 Incluye <code>.p12</code>, contraseña y <code>.mobileprovision</code>.\n\n"
+        "📦 Incluye <code>.p12</code> + <code>.mobileprovision</code> + entrega web privada.\n\n"
+        "🔵 Después del pago registrarás tu <b>UDID</b> y podrás consultar el certificado siempre desde <b>💠 Tu certificado</b>.\n\n"
         "El costo se descontará de tu saldo del bot.",
         reply_markup=keys,
         parse_mode=ParseMode.HTML,
@@ -72,6 +157,7 @@ async def show_certificate_offer(update):
 
 _original_callback = bot.callback
 _original_handle_flow = bot.handle_flow
+_original_handle_text_menu = bot.handle_text_menu
 
 
 async def callback(update, context):
@@ -151,11 +237,13 @@ async def callback(update, context):
             return
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
-            "🎉 <b>PAGO CONFIRMADO</b>\n━━━━━━━━━━━━━━━━━━\n"
+            "🤖✅ <b>PAGO CONFIRMADO</b>\n"
+            "<code>certificate.payment = ACCEPTED</code>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
             f"🔑 Key: <code>{issued['key_code']}</code>\n"
             f"💵 Precio aplicado: <b>{bot.money(price)}</b>\n"
             f"💰 Saldo restante: <b>{bot.money(issued['balance_cents'])}</b>\n\n"
-            "La key se activó para iniciar tu certificado.",
+            "📲 Ahora registra tu UDID. Cuando el certificado esté listo quedará guardado en <b>💠 Tu certificado</b> y tendrás tu web privada de entrega.",
             reply_markup=bot.certificate_menu(bot.language_of(user)),
             parse_mode=ParseMode.HTML,
         )
@@ -191,19 +279,63 @@ async def handle_flow(update, context):
             parse_mode=ParseMode.HTML,
             reply_markup=bot.ADMIN_MENU,
         )
-        try:
-            await bot.reseller_bot(context).send_message(
-                target, f"🍎 Tienes un precio especial para Certificado iOS: {bot.money(price)}"
-            )
-        except Exception:
-            pass
         return True
     return await _original_handle_flow(update, context)
 
 
+async def handle_text_menu(update, context):
+    if bot.panel(context) != "admin":
+        text = (update.effective_message.text or "").strip()
+        user = bot.current_user(update)
+        if user and user["role"] in ("reseller", "admin") and text in (
+            "💠 Tu certificado", "💠 My certificate"
+        ):
+            context.user_data.pop("flow", None)
+            context.user_data.pop("certificate_pending", None)
+            await show_my_certificates(update, context)
+            return
+    return await _original_handle_text_menu(update, context)
+
+
+bot.USER_MENU = ReplyKeyboardMarkup(
+    [[KeyboardButton("🍎 Certificado iOS"), KeyboardButton("🔑 Use Key")],
+     [KeyboardButton("💠 Tu certificado"), KeyboardButton("🔍 Check UDID")],
+     [KeyboardButton("⚙️ Settings")],
+     [KeyboardButton("🛒 Comprar keys"), KeyboardButton("💳 Recargar saldo")],
+     [KeyboardButton("🔑 Mis keys"), KeyboardButton("🔍 Consultar key")],
+     [KeyboardButton("👤 Mi cuenta"), KeyboardButton("🧾 Historial")],
+     [KeyboardButton("🆘 Soporte"), KeyboardButton("🌐 Idioma / Language")]],
+    resize_keyboard=True,
+)
+bot.USER_MENU_EN = ReplyKeyboardMarkup(
+    [[KeyboardButton("🍎 iOS Certificate"), KeyboardButton("🔑 Use Key")],
+     [KeyboardButton("💠 My certificate"), KeyboardButton("🔍 Check UDID")],
+     [KeyboardButton("⚙️ Settings")],
+     [KeyboardButton("🛒 Buy keys"), KeyboardButton("💳 Add balance")],
+     [KeyboardButton("🔑 My keys"), KeyboardButton("🔍 Check key")],
+     [KeyboardButton("👤 My account"), KeyboardButton("🧾 History")],
+     [KeyboardButton("🆘 Support"), KeyboardButton("🌐 Language / Idioma")]],
+    resize_keyboard=True,
+)
+bot.CERTIFICATE_MENU = ReplyKeyboardMarkup(
+    [[KeyboardButton("👋 Welcome!")],
+     [KeyboardButton("🍎 Certificado iOS"), KeyboardButton("💠 Tu certificado")],
+     [KeyboardButton("🔍 Check UDID"), KeyboardButton("🔑 Use Key")],
+     [KeyboardButton("⚙️ Settings")]],
+    resize_keyboard=True,
+)
+bot.CERTIFICATE_MENU_EN = ReplyKeyboardMarkup(
+    [[KeyboardButton("👋 Welcome!")],
+     [KeyboardButton("🍎 iOS Certificate"), KeyboardButton("💠 My certificate")],
+     [KeyboardButton("🔍 Check UDID"), KeyboardButton("🔑 Use Key")],
+     [KeyboardButton("⚙️ Settings")]],
+    resize_keyboard=True,
+)
+
 bot.show_certificate_offer = show_certificate_offer
 bot.callback = callback
 bot.handle_flow = handle_flow
+bot.handle_text_menu = handle_text_menu
 
 
 if __name__ == "__main__":
