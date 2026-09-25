@@ -1,5 +1,6 @@
 import os
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -42,6 +43,26 @@ class PaymentMethodTests(unittest.IsolatedAsyncioTestCase):
             await bot.callback(SimpleNamespace(callback_query=query), context)
         self.assertEqual(context.user_data["flow"]["name"], "topup_method")
         query.message.reply_text.assert_not_awaited()
+
+    async def test_cash_app_link_opens_payment_and_accepts_proof(self):
+        query = SimpleNamespace(data="pay:method:cashapp", from_user=SimpleNamespace(id=2),
+                                answer=AsyncMock(), message=SimpleNamespace(reply_photo=AsyncMock(), reply_text=AsyncMock()))
+        context = SimpleNamespace(user_data={"flow": {"name": "topup_method", "amount_cents": 2500}})
+        configured = replace(bot.settings, cash_app_url="https://cash.app/$SampleAccount")
+        with patch.object(bot, "settings", configured), \
+             patch.object(bot, "current_user", return_value={"role": "reseller"}), \
+             patch.object(bot, "panel", return_value="reseller"):
+            await bot.callback(SimpleNamespace(callback_query=query), context)
+            buttons = query.message.reply_photo.await_args.kwargs["reply_markup"].inline_keyboard
+            self.assertEqual(buttons[0][0].url, "https://cash.app/$SampleAccount")
+            self.assertEqual(buttons[1][0].callback_data, "pay:proof")
+            query.data = "pay:proof"
+            await bot.callback(SimpleNamespace(callback_query=query), context)
+        self.assertEqual(context.user_data["flow"]["name"], "topup_proof")
+
+    def test_payment_link_rejects_other_hosts(self):
+        with patch.object(bot, "settings", replace(bot.settings, paypal_url="https://paypal.me.bad.example/user")):
+            self.assertFalse(bot.payment_ready("paypal"))
 
 
 if __name__ == "__main__":

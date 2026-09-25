@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, MessageEntity, ReplyKeyboardMarkup, Update
@@ -430,7 +431,8 @@ async def show_topups(update: Update) -> None:
         return
     for item in rows:
         tag = f"@{item['username']}" if item["username"] else item["full_name"]
-        text = f"💳 <b>Recarga #{item['id']}</b>\nUsuario: {html.escape(tag)}\nCantidad: <b>{money(item['amount_cents'])}</b>"
+        method = {"zelle": "Zelle", "cashapp": "Cash App", "paypal": "PayPal"}.get(item["payment_method"], "No indicado")
+        text = f"💳 <b>Recarga #{item['id']}</b>\nUsuario: {html.escape(tag)}\nMétodo: <b>{method}</b>\nCantidad: <b>{money(item['amount_cents'])}</b>"
         keys = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Aprobar", callback_data=f"topup:approve:{item['id']}"),
             InlineKeyboardButton("❌ Rechazar", callback_data=f"topup:reject:{item['id']}"),
@@ -755,19 +757,32 @@ async def begin_topup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.effective_message.reply_text("💳 Escribe la cantidad que deseas recargar. Ejemplo: <code>25.00</code>", parse_mode=ParseMode.HTML)
 
 
+def payment_url(method: str) -> str:
+    value, allowed_host = {
+        "cashapp": (settings.cash_app_url, "cash.app"),
+        "paypal": (settings.paypal_url, "paypal.me"),
+    }.get(method, ("", ""))
+    parsed = urlparse(value)
+    return value if parsed.scheme == "https" and parsed.hostname in (allowed_host, f"www.{allowed_host}") else ""
+
+
+def payment_ready(method: str) -> bool:
+    return (bool(settings.zelle_number and settings.zelle_holder)
+            if method == "zelle" else bool(payment_url(method)))
+
+
 def payment_methods_keyboard() -> InlineKeyboardMarkup:
-    zelle_ready = bool(settings.zelle_number and settings.zelle_holder)
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💜 Zelle · disponible" if zelle_ready else "💜 Zelle · pendiente", callback_data="pay:method:zelle")],
-        [InlineKeyboardButton("💚 Cash App · pendiente", callback_data="pay:method:cashapp")],
-        [InlineKeyboardButton("💙 PayPal · pendiente", callback_data="pay:method:paypal")],
+        [InlineKeyboardButton(f"💜 Zelle · {'disponible' if payment_ready('zelle') else 'pendiente'}", callback_data="pay:method:zelle")],
+        [InlineKeyboardButton(f"💚 Cash App · {'disponible' if payment_ready('cashapp') else 'pendiente'}", callback_data="pay:method:cashapp")],
+        [InlineKeyboardButton(f"💙 PayPal · {'disponible' if payment_ready('paypal') else 'pendiente'}", callback_data="pay:method:paypal")],
     ])
 
 
 async def show_payment_method(query, context: ContextTypes.DEFAULT_TYPE, method: str) -> None:
     flow = context.user_data.get("flow", {})
     amount = money(flow["amount_cents"])
-    if method == "zelle" and settings.zelle_number and settings.zelle_holder:
+    if method == "zelle" and payment_ready(method):
         details = (
             "💜 <b>RANDY SYSTEMS | ZELLE</b>\n"
             f"💰 Recarga: <b>{amount}</b>\n\n"
@@ -777,6 +792,20 @@ async def show_payment_method(query, context: ContextTypes.DEFAULT_TYPE, method:
             "El saldo se agrega cuando el administrador lo apruebe."
         )
         buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📎 Enviar comprobante", callback_data="pay:proof")],
+            [InlineKeyboardButton("⬅️ Otros métodos", callback_data="pay:methods")],
+        ])
+    elif payment_ready(method):
+        name = "Cash App" if method == "cashapp" else "PayPal"
+        url = payment_url(method)
+        details = (f"💳 <b>RANDY SYSTEMS | {name}</b>\n"
+                   f"💰 Recarga: <b>{amount}</b>\n\n"
+                   f"🔗 <a href=\"{html.escape(url, quote=True)}\">Abrir enlace de pago</a>\n\n"
+                   "Comprueba el destinatario y el importe antes de pagar. "
+                   "Después envía tu comprobante para revisión del administrador; "
+                   "el saldo no se acredita automáticamente.")
+        buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"🔗 Abrir {name}", url=url)],
             [InlineKeyboardButton("📎 Enviar comprobante", callback_data="pay:proof")],
             [InlineKeyboardButton("⬅️ Otros métodos", callback_data="pay:methods")],
         ])
@@ -1443,8 +1472,10 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             await message.reply_text("❌ Envía una imagen, documento o referencia escrita.")
             return True
         topup_id = db.create_topup(
-            message.from_user.id, flow["amount_cents"], proof_type, proof, proof_blob, proof_name
+            message.from_user.id, flow["amount_cents"], proof_type, proof, proof_blob, proof_name,
+            payment_method=flow.get("method", "unknown"),
         )
+        method = {"zelle": "Zelle", "cashapp": "Cash App", "paypal": "PayPal"}.get(flow.get("method"), "No indicado")
         context.user_data.pop("flow", None)
         await message.reply_text(f"✅ Recarga #{topup_id} enviada. Espera la aprobación del Admin.", reply_markup=USER_MENU)
         item = db.topup(topup_id)
@@ -1452,7 +1483,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             InlineKeyboardButton("✅ Aprobar", callback_data=f"topup:approve:{topup_id}"),
             InlineKeyboardButton("❌ Rechazar", callback_data=f"topup:reject:{topup_id}"),
         ]])
-        caption = f"💳 <b>Nueva recarga #{topup_id}</b>\nUsuario: <code>{item['user_id']}</code>\nCantidad: <b>{money(item['amount_cents'])}</b>"
+        caption = f"💳 <b>Nueva recarga #{topup_id}</b>\nUsuario: <code>{item['user_id']}</code>\nMétodo: <b>{method}</b>\nCantidad: <b>{money(item['amount_cents'])}</b>"
         for admin_id in set(settings.admin_ids) | set(db.admin_ids()):
             try:
                 if proof_type == "photo":
@@ -1599,13 +1630,13 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.answer()
         if data == "pay:methods":
             await query.message.reply_text("💳 Elige tu método:", reply_markup=payment_methods_keyboard())
-        elif data == "pay:proof" and flow.get("method") == "zelle" and settings.zelle_number and settings.zelle_holder:
+        elif data == "pay:proof" and payment_ready(flow.get("method", "")):
             flow["name"] = "topup_proof"
-            await query.message.reply_text("📎 Envía la captura/documento de Zelle o escribe la referencia de pago.")
+            await query.message.reply_text("📎 Envía una captura/documento del pago o escribe la referencia.")
         elif data.startswith("pay:method:"):
             method = data.split(":", 2)[2]
             if method in ("zelle", "cashapp", "paypal"):
-                flow["method"] = method if method == "zelle" and settings.zelle_number and settings.zelle_holder else None
+                flow["method"] = method if payment_ready(method) else None
                 await show_payment_method(query, context, method)
         return
 

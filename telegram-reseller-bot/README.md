@@ -8,7 +8,7 @@ Dos bots de Telegram conectados al mismo inventario: uno privado para el Admin y
 - Bot Admin privado y bot de revendedores completamente separados.
 - Productos con emojis y emoticones; edición de nombre, precio, duración, descripción e instrucciones sin borrar keys ni precios especiales.
 - Carga masiva de keys, una por línea, con bloqueo de duplicados.
-- Recargas manuales con selección visual de método, comprobante y aprobación/rechazo del Admin. Zelle se activa mediante variables privadas de Render; Cash App y PayPal se muestran pendientes hasta que se proporcionen los enlaces oficiales.
+- Recargas manuales con selección visual de método, enlaces de pago configurables, comprobante y aprobación/rechazo del Admin. Los tres métodos se activan mediante variables privadas de Render.
 - Entrega automática de una sola key después de descontar el saldo.
 - Duración configurable por producto y cuenta regresiva en **Mis keys**.
 - Foto, sticker animado y archivo descargable por producto.
@@ -42,6 +42,8 @@ STORE_NAME=RANDY RESELLER SYSTEMS
 SUPPORT_USERNAME=@Randy_zt
 ZELLE_NUMBER=tu_numero_zelle
 ZELLE_HOLDER=tu_titular_zelle
+CASH_APP_URL=https://cash.app/\$tu_usuario
+PAYPAL_URL=https://www.paypal.me/tu_usuario
 DATABASE_PATH=data/reseller.db
 KEY_API_URL=https://tu-api.example.com/eventos
 KEY_API_TOKEN=token_opcional_del_api
@@ -75,7 +77,7 @@ python bot.py
 - En **Control keys**, el Admin puede consultar, resetear HWID, bloquear o desbloquear una licencia.
 - Un usuario nuevo pulsa **Solicitar acceso**.
 - El Admin recibe **Aprobar / Rechazar**.
-- El revendedor indica el importe, elige Zelle y ve la tarjeta con los datos de pago; después envía su comprobante. Cash App y PayPal indican que están pendientes y no aceptan comprobantes.
+- El revendedor indica el importe, elige Zelle, Cash App o PayPal y ve la tarjeta con los datos o el enlace; después envía el comprobante. Los métodos sin configurar aparecen pendientes y no aceptan comprobantes.
 - Tras la aprobación, compra un producto y recibe la key inmediatamente.
 - En **Certificado iOS**, una compra de $3.50 genera una key interna y comienza el pedido automático del plan ChungChi configurado.
 - **Use Key** permite retomar una key no usada y **Check UDID** consulta solamente los pedidos del usuario actual.

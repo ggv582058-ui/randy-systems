@@ -29,6 +29,8 @@ class Settings:
     support_username: str
     zelle_number: str
     zelle_holder: str
+    cash_app_url: str
+    paypal_url: str
     key_api_url: str
     key_api_token: str
     zentry_base_url: str
@@ -71,6 +73,8 @@ def load_settings() -> Settings:
         support_username=os.getenv("SUPPORT_USERNAME", "@Randy_zt").strip(),
         zelle_number=os.getenv("ZELLE_NUMBER", "").strip(),
         zelle_holder=os.getenv("ZELLE_HOLDER", "").strip(),
+        cash_app_url=os.getenv("CASH_APP_URL", "").strip(),
+        paypal_url=os.getenv("PAYPAL_URL", "").strip(),
         key_api_url=os.getenv("KEY_API_URL", "").strip(),
         key_api_token=os.getenv("KEY_API_TOKEN", "").strip(),
         zentry_base_url=os.getenv("ZENTRY_BASE_URL", "https://api.zentryauth.com").strip().rstrip("/"),

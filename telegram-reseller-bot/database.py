@@ -279,6 +279,8 @@ class Database:
                 con.execute("ALTER TABLE topups ADD COLUMN proof_blob BLOB")
             if "proof_name" not in topup_columns:
                 con.execute("ALTER TABLE topups ADD COLUMN proof_name TEXT")
+            if "payment_method" not in topup_columns:
+                con.execute("ALTER TABLE topups ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'unknown'")
 
             product_columns = {row["name"] for row in con.execute("PRAGMA table_info(products)")}
             if "duration_days" not in product_columns:
@@ -679,15 +681,16 @@ class Database:
         return added, len(clean) - added
 
     def create_topup(self, user_id: int, amount_cents: int, proof_type: str, proof_value: str,
-                     proof_blob: bytes | None = None, proof_name: str | None = None) -> int:
+                     proof_blob: bytes | None = None, proof_name: str | None = None,
+                     payment_method: str = "unknown") -> int:
         with self.transaction() as con:
             row = con.execute("SELECT role FROM users WHERE telegram_id=?", (user_id,)).fetchone()
             if not row or row["role"] not in ("reseller", "admin"):
                 raise NotApproved("Usuario no aprobado")
             cur = con.execute(
-                """INSERT INTO topups(user_id,amount_cents,proof_type,proof_value,created_at,proof_blob,proof_name)
-                   VALUES(?,?,?,?,?,?,?)""",
-                (user_id, amount_cents, proof_type, proof_value, utcnow(), proof_blob, proof_name),
+                """INSERT INTO topups(user_id,amount_cents,proof_type,proof_value,created_at,proof_blob,proof_name,payment_method)
+                   VALUES(?,?,?,?,?,?,?,?)""",
+                (user_id, amount_cents, proof_type, proof_value, utcnow(), proof_blob, proof_name, payment_method),
             )
             return int(cur.lastrowid)
 

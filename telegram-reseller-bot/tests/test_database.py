@@ -75,6 +75,12 @@ class DatabaseTests(unittest.TestCase):
         self.assertFalse(second)
         self.assertEqual(self.db.user(2)["balance_cents"], 1200)
 
+    def test_topup_payment_method_survives_restart(self):
+        topup = self.db.create_topup(2, 1200, "text", "proof", payment_method="paypal")
+        restarted = Database(self.db.path)
+        restarted.initialize()
+        self.assertEqual(restarted.topup(topup)["payment_method"], "paypal")
+
     def test_insufficient_balance_does_not_consume_key(self):
         self.db.add_keys(self.product, ["SAFE-KEY"])
         with self.assertRaises(InsufficientBalance):
