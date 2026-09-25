@@ -11,6 +11,12 @@ import bot
 
 
 class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
+    def test_randy_cover_is_packaged_for_default_offers(self):
+        cover = bot.randy_cover()
+        self.assertGreater(len(cover), 1000)
+        self.assertTrue(cover.startswith(b"\xff\xd8\xff"))
+        self.assertEqual(bot.product_cover({"name": "Randy 📍 Mod"}, None)[0], cover)
+
     def setUp(self):
         self.reply = AsyncMock()
         self.context = SimpleNamespace(user_data={"flow": {"name": "certificate_udid"},

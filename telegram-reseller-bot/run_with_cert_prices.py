@@ -153,7 +153,7 @@ async def show_certificate_offer(update):
         "🔵 Después del pago registrarás tu <b>UDID</b> y podrás consultar el certificado siempre desde <b>💠 Tu certificado</b>.\n\n"
         "El costo se descontará de tu saldo del bot."
     )
-    cover = bot.db.certificate_offer_photo()
+    cover = bot.db.certificate_offer_photo() or bot.randy_cover()
     if cover:
         await loading.delete()
         photo = io.BytesIO(cover)

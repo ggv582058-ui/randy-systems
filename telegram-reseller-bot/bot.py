@@ -15,6 +15,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from functools import lru_cache
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, MessageEntity, ReplyKeyboardMarkup, Update
@@ -145,6 +147,23 @@ def money(cents: int) -> str:
 
 def product_name_html(product) -> str:
     return product["name_html"] or html.escape(product["name"])
+
+
+@lru_cache(maxsize=1)
+def randy_cover() -> bytes:
+    try:
+        return Path(__file__).with_name("randy-mod-cover.jpg").read_bytes()
+    except OSError:
+        log.warning("La portada Randy Mod no está disponible")
+        return b""
+
+
+def product_cover(product, media) -> tuple[bytes, str]:
+    if media and media["photo_data"]:
+        return media["photo_data"], media["photo_name"] or "product.jpg"
+    if "randy" in product["name"].lower() and "mod" in product["name"].lower():
+        return randy_cover(), "randy-mod-cover.jpg"
+    return b"", ""
 
 
 def custom_emoji_id(message) -> str:
@@ -341,10 +360,11 @@ async def show_buy(update: Update) -> None:
         )
     for product in db.products_for_user(update.effective_user.id)[:10]:
         media = db.product_media(product["id"])
-        if not media or not media["photo_data"]:
+        cover, cover_name = product_cover(product, media)
+        if not cover:
             continue
-        photo = io.BytesIO(media["photo_data"])
-        photo.name = media["photo_name"] or "product.jpg"
+        photo = io.BytesIO(cover)
+        photo.name = cover_name
         try:
             await update.effective_message.reply_photo(
                 photo,
@@ -2031,9 +2051,10 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await query.message.reply_sticker(sticker)
             except Exception as exc:
                 log.warning("No se pudo mostrar sticker del producto %s: %s", product_id, exc)
-        if media and media["photo_data"]:
-            photo = io.BytesIO(media["photo_data"])
-            photo.name = media["photo_name"] or "product.jpg"
+        cover, cover_name = product_cover(p, media)
+        if cover:
+            photo = io.BytesIO(cover)
+            photo.name = cover_name
             try:
                 await query.message.reply_photo(photo, caption=caption, reply_markup=keys, parse_mode=ParseMode.HTML)
             except BadRequest as exc:

@@ -67,6 +67,7 @@ python bot.py
 
 - El Admin abre `/start` en su bot privado y administra desde los botones.
 - En **Productos → Editar → 📷 Foto**, puede reemplazar la portada de un producto sin recrearlo. En **Multimedia → 🍎 Portada del certificado**, puede subir la imagen de la oferta de certificados. Se aceptan fotos y archivos JPG/PNG.
+- La imagen Randy Mod incluida con el proyecto aparece automáticamente en productos Randy Mod sin foto propia y en la oferta de certificado hasta que el Admin suba otra.
 - Los nombres guardan el identificador de emojis personalizados para mostrarlos en el catálogo cuando Telegram permite al bot usarlos; el emoji normal de respaldo sigue visible en los demás clientes.
 - En **API Zentry**, el Admin elige producto y cantidad; las licencias toman la duración del producto y pasan al inventario automáticamente.
 - En **Control keys**, el Admin puede consultar, resetear HWID, bloquear o desbloquear una licencia.
