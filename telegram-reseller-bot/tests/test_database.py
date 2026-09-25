@@ -25,6 +25,27 @@ class DatabaseTests(unittest.TestCase):
         changed, _ = self.db.approve_topup(topup, 1)
         self.assertTrue(changed)
 
+    def test_edit_product_preserves_inventory_and_partner_price(self):
+        self.db.add_keys(self.product, ["KEY-EXISTING"])
+        self.db.set_reseller_price(2, self.product, 350)
+        self.assertTrue(self.db.update_product(self.product, "name", "💎 Producto :D"))
+        self.assertTrue(self.db.update_product(self.product, "price_cents", 700))
+        self.assertEqual(self.db.product(self.product)["stock"], 1)
+        row = self.db.product_for_user(self.product, 2)
+        self.assertEqual(row["name"], "💎 Producto :D")
+        self.assertEqual(row["effective_price_cents"], 350)
+
+    def test_daily_announcement_claims_once_and_survives_restart(self):
+        self.db.set_daily_announcement("💎 Hola :D", "10:30")
+        self.assertIsNone(self.db.claim_daily_announcement("2026-09-25", "10:29"))
+        self.assertEqual(self.db.claim_daily_announcement("2026-09-25", "10:30"), "💎 Hola :D")
+        self.assertIsNone(self.db.claim_daily_announcement("2026-09-25", "10:31"))
+        restarted = Database(self.db.path)
+        restarted.initialize()
+        self.assertEqual(restarted.claim_daily_announcement("2026-09-26", "10:30"), "💎 Hola :D")
+        restarted.pause_daily_announcement()
+        self.assertIsNone(restarted.claim_daily_announcement("2026-09-27", "10:30"))
+
     def test_purchase_is_atomic_and_key_is_unique(self):
         self.credit()
         self.db.add_keys(self.product, ["ABC-123"])

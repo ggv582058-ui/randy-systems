@@ -248,6 +248,15 @@ class Database:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS daily_announcements (
+                    id INTEGER PRIMARY KEY CHECK(id = 1),
+                    body TEXT NOT NULL,
+                    send_time TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    last_sent_date TEXT,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_certificate_orders_user
                     ON certificate_orders(user_id, id DESC);
                 CREATE INDEX IF NOT EXISTS idx_certificate_orders_status
@@ -521,6 +530,46 @@ class Database:
                    WHERE p.id=? GROUP BY p.id""",
                 (product_id,),
             ).fetchone()
+
+    def update_product(self, product_id: int, field: str, value: str | int) -> bool:
+        allowed = {"name", "description", "price_cents", "duration_days", "instructions"}
+        if field not in allowed:
+            raise ValueError("Campo de producto inválido")
+        if field == "price_cents" and (not isinstance(value, int) or value <= 0):
+            raise ValueError("Precio inválido")
+        if field == "duration_days" and (not isinstance(value, int) or not 1 <= value <= 3650):
+            raise ValueError("Duración inválida")
+        with self.transaction() as con:
+            cur = con.execute(f"UPDATE products SET {field}=? WHERE id=?", (value, product_id))
+            return cur.rowcount == 1
+
+    def daily_announcement(self) -> sqlite3.Row | None:
+        with self.connect() as con:
+            return con.execute("SELECT * FROM daily_announcements WHERE id=1").fetchone()
+
+    def set_daily_announcement(self, body: str, send_time: str, last_sent_date: str | None = None) -> None:
+        with self.transaction() as con:
+            con.execute(
+                """INSERT INTO daily_announcements(id,body,send_time,enabled,last_sent_date,updated_at)
+                   VALUES(1,?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET
+                   body=excluded.body,send_time=excluded.send_time,enabled=1,
+                   last_sent_date=excluded.last_sent_date,updated_at=excluded.updated_at""",
+                (body, send_time, last_sent_date, utcnow()),
+            )
+
+    def pause_daily_announcement(self) -> None:
+        with self.transaction() as con:
+            con.execute("UPDATE daily_announcements SET enabled=0,updated_at=? WHERE id=1", (utcnow(),))
+
+    def claim_daily_announcement(self, local_date: str, local_time: str) -> str | None:
+        with self.transaction() as con:
+            row = con.execute("SELECT body FROM daily_announcements WHERE id=1 AND enabled=1 "
+                              "AND send_time<=? AND (last_sent_date IS NULL OR last_sent_date<>?)",
+                              (local_time, local_date)).fetchone()
+            if row:
+                con.execute("UPDATE daily_announcements SET last_sent_date=? WHERE id=1", (local_date,))
+                return row["body"]
+        return None
 
     def products(self, active_only: bool = True) -> list[sqlite3.Row]:
         where = "WHERE p.active=1" if active_only else ""

@@ -14,6 +14,7 @@ import sqlite3
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -327,7 +328,7 @@ async def show_products_admin(update: Update) -> None:
         )
         rows.append([InlineKeyboardButton(
             f"{'Desactivar' if p['active'] else 'Activar'} · {p['name']}", callback_data=f"product:toggle:{p['id']}"
-        )])
+        ), InlineKeyboardButton("✏️ Editar", callback_data=f"product:edit:{p['id']}")])
     await update.effective_message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
 
 
@@ -869,8 +870,18 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context.user_data["flow"] = {"name": "partner_create_login"}
         await update.effective_message.reply_text("👤 Escribe el usuario para el socio:")
     elif admin_panel and user["role"] == "admin" and text in ("📢 Anuncios", "📢 Announcements"):
-        context.user_data["flow"] = {"name": "broadcast"}
-        await update.effective_message.reply_text("📢 Envía el mensaje, foto o archivo que recibirán todos los socios.")
+        current = db.daily_announcement()
+        status = (f"{'🟢 Activo' if current['enabled'] else '⏸️ Pausado'} · {current['send_time']} (Nueva York)"
+                  if current else "Sin anuncio diario")
+        await update.effective_message.reply_text(
+            f"📢 <b>Anuncios a vendedores</b>\n{status}\n\nEl anuncio diario admite texto, emojis y emoticones.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📤 Enviar ahora", callback_data="announcement:now")],
+                [InlineKeyboardButton("🗓️ Programar diario", callback_data="announcement:daily")],
+                [InlineKeyboardButton("⏸️ Pausar diario", callback_data="announcement:pause")],
+            ]),
+        )
     elif admin_panel and user["role"] == "admin" and text in ("👥 Revendedores", "👥 Resellers"):
         await show_resellers(update)
     elif admin_panel and user["role"] == "admin" and text in ("💳 Recargas", "💳 Top-ups"):
@@ -1317,6 +1328,51 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 log.warning("No se notificó recarga al admin %s: %s", admin_id, exc)
         return True
 
+    if flow["name"] == "daily_announcement_text":
+        if not text or len(text) > 4000:
+            await message.reply_text("❌ Escribe un mensaje de hasta 4000 caracteres.")
+            return True
+        flow["body"] = text
+        flow["name"] = "daily_announcement_time"
+        await message.reply_text("🕒 ¿A qué hora todos los días? Escribe HH:MM, hora de Nueva York. Ejemplo: 10:30")
+        return True
+
+    if flow["name"] == "daily_announcement_time":
+        if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", text):
+            await message.reply_text("❌ Hora inválida. Usa HH:MM, por ejemplo 10:30.")
+            return True
+        now = datetime.now(ZoneInfo("America/New_York"))
+        db.set_daily_announcement(flow["body"], text, now.date().isoformat() if now.strftime("%H:%M") >= text else None)
+        context.user_data.pop("flow", None)
+        await message.reply_text(f"✅ Anuncio diario guardado para las {text} (Nueva York).", reply_markup=ADMIN_MENU)
+        return True
+
+    if flow["name"] == "product_edit":
+        product_id, field = flow["product_id"], flow["field"]
+        if not db.product(product_id):
+            context.user_data.pop("flow", None)
+            await message.reply_text("❌ Producto no encontrado.")
+            return True
+        try:
+            if field == "price_cents":
+                value = parse_amount(text)
+            elif field == "duration_days":
+                value = int(text)
+            elif field == "name":
+                value = text.strip()[:100]
+                if len(value) < 2:
+                    raise ValueError("Nombre demasiado corto")
+            else:
+                value = "" if text == "-" else text[:1500 if field == "instructions" else 500]
+            if not db.update_product(product_id, field, value):
+                raise ValueError("Producto no encontrado")
+        except (ValueError, TypeError) as exc:
+            await message.reply_text(f"❌ {html.escape(str(exc))}. Inténtalo otra vez.")
+            return True
+        context.user_data.pop("flow", None)
+        await message.reply_text("✅ Producto actualizado sin borrar sus keys, archivos ni precios por socio.", reply_markup=ADMIN_MENU)
+        return True
+
     if flow["name"] == "product_name":
         if len(text) < 2:
             await message.reply_text("Escribe un nombre válido.")
@@ -1594,6 +1650,61 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await reseller_bot(context).send_message(target, "✅ Tu cuenta fue aprobada como revendedor." if role == "reseller" else "❌ Tu acceso de revendedor no fue aprobado.", reply_markup=USER_MENU if role == "reseller" else PENDING_MENU)
             except Exception:
                 pass
+        return
+
+    if data.startswith("announcement:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        await query.answer()
+        action = data.split(":", 1)[1]
+        if action == "pause":
+            db.pause_daily_announcement()
+            await query.message.reply_text("⏸️ Anuncio diario pausado.")
+        elif action == "daily":
+            context.user_data["flow"] = {"name": "daily_announcement_text"}
+            await query.message.reply_text("🗓️ Envía el texto diario. Puedes incluir emojis y emoticones como :) o :D")
+        elif action == "now":
+            context.user_data["flow"] = {"name": "broadcast"}
+            await query.message.reply_text("📤 Envía el mensaje, foto o archivo para todos los socios ahora.")
+        return
+
+    if data.startswith("product:editfield:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        _, _, raw_id, field = data.split(":")
+        product = db.product(int(raw_id))
+        labels = {"name": "nombre y emojis", "price_cents": "precio (ej. 14.99)",
+                  "duration_days": "duración en días", "description": "descripción",
+                  "instructions": "instrucciones de entrega"}
+        if not product or field not in labels:
+            await query.answer("Producto no encontrado", show_alert=True)
+            return
+        await query.answer()
+        context.user_data["flow"] = {"name": "product_edit", "product_id": product["id"], "field": field}
+        await query.message.reply_text(f"✏️ Envía el nuevo valor de {labels[field]} para #{product['id']}. Usa - para vaciar descripción o instrucciones.")
+        return
+
+    if data.startswith("product:edit:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        product_id = int(data.rsplit(":", 1)[1])
+        product = db.product(product_id)
+        if not product:
+            await query.answer("Producto no encontrado", show_alert=True)
+            return
+        await query.answer()
+        fields = (("📦 Nombre / emojis", "name"), ("💵 Precio", "price_cents"),
+                  ("⏳ Duración", "duration_days"), ("📝 Descripción", "description"),
+                  ("📋 Instrucciones", "instructions"))
+        await query.message.reply_text(
+            f"✏️ <b>Editar #{product_id}</b> · {html.escape(product['name'])}\nSelecciona un campo:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=f"product:editfield:{product_id}:{field}")]
+                                             for label, field in fields]),
+        )
         return
 
     if data == "product:new":
@@ -1944,6 +2055,27 @@ async def certificate_poll_loop(bot, stop_event: asyncio.Event) -> None:
             pass
 
 
+async def daily_announcement_loop(bot, stop_event: asyncio.Event) -> None:
+    new_york = ZoneInfo("America/New_York")
+    while not stop_event.is_set():
+        now = datetime.now(new_york)
+        body = db.claim_daily_announcement(now.date().isoformat(), now.strftime("%H:%M"))
+        if body:
+            sent = failed = 0
+            for target in db.reseller_ids():
+                try:
+                    await bot.send_message(target, body)
+                    sent += 1
+                except Exception as exc:
+                    failed += 1
+                    log.warning("Anuncio diario no entregado a %s: %s", target, exc)
+            log.info("Anuncio diario: %s entregados, %s fallidos", sent, failed)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            pass
+
+
 async def run_bots() -> None:
     db.initialize()
     server = start_health_server(asyncio.get_running_loop())
@@ -1954,6 +2086,7 @@ async def run_bots() -> None:
     started = []
     stop_event = asyncio.Event()
     poll_task = None
+    announcement_task = None
     loop = asyncio.get_running_loop()
     for signame in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -2057,9 +2190,16 @@ async def run_bots() -> None:
 
         server.configure_certificates(certificate_lookup, certificate_download, certificate_webhook)
         poll_task = asyncio.create_task(certificate_poll_loop(reseller_app.bot, stop_event))
+        announcement_task = asyncio.create_task(daily_announcement_loop(reseller_app.bot, stop_event))
         log.info("Bots iniciados por webhook: revendedores + admin (%s)", settings.store_name)
         await stop_event.wait()
     finally:
+        if announcement_task:
+            announcement_task.cancel()
+            try:
+                await announcement_task
+            except asyncio.CancelledError:
+                pass
         if poll_task:
             poll_task.cancel()
             try:

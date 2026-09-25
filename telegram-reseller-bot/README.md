@@ -6,7 +6,7 @@ Dos bots de Telegram conectados al mismo inventario: uno privado para el Admin y
 
 - Acceso restringido: solo el Admin puede aprobar revendedores.
 - Bot Admin privado y bot de revendedores completamente separados.
-- Productos, precios, activación/desactivación y stock.
+- Productos con emojis y emoticones; edición de nombre, precio, duración, descripción e instrucciones sin borrar keys ni precios especiales.
 - Carga masiva de keys, una por línea, con bloqueo de duplicados.
 - Recargas manuales con comprobante y aprobación/rechazo del Admin.
 - Entrega automática de una sola key después de descontar el saldo.
@@ -14,7 +14,7 @@ Dos bots de Telegram conectados al mismo inventario: uno privado para el Admin y
 - Foto, sticker animado y archivo descargable por producto.
 - Precios y permisos de compra individuales para cada socio.
 - Creación de cuentas con rol de socio o administrador y saldo inicial.
-- Anuncios masivos de texto, foto, video, animación, sticker o documento.
+- Anuncios manuales de texto, foto, video, animación, sticker o documento; anuncio diario de texto con hora de Nueva York y opción de pausa.
 - Webhook opcional para conectar compras con un API externo.
 - Integración Seller API de ZentryAuth para generar hasta 100 keys por lote, consultar, resetear HWID y bloquear/desbloquear licencias desde el bot Admin.
 - Venta automática de certificados iOS mediante ChungChi: key interna de un uso, captura de UDID, iPhone/iPad, contraseña P12 y nombre personalizado.
