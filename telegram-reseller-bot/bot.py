@@ -51,7 +51,7 @@ ADMIN_MENU = ReplyKeyboardMarkup(
     [[KeyboardButton("📦 Productos"), KeyboardButton("🔑 Añadir keys")],
      [KeyboardButton("📎 Archivos"), KeyboardButton("🎨 Multimedia")],
      [KeyboardButton("➕ Crear socio"), KeyboardButton("👥 Revendedores")],
-     [KeyboardButton("💳 Recargas"), KeyboardButton("📢 Anuncios")],
+     [KeyboardButton("💳 Recargas"), KeyboardButton("📢 Anuncio global")],
      [KeyboardButton("⚡ API Zentry"), KeyboardButton("🛡️ Control keys")],
      [KeyboardButton("📊 Estadísticas"), KeyboardButton("🌐 Idioma / Language")]],
     resize_keyboard=True,
@@ -60,7 +60,7 @@ ADMIN_MENU_EN = ReplyKeyboardMarkup(
     [[KeyboardButton("📦 Products"), KeyboardButton("🔑 Add keys")],
      [KeyboardButton("📎 Files"), KeyboardButton("🎨 Media")],
      [KeyboardButton("➕ Create partner"), KeyboardButton("👥 Resellers")],
-     [KeyboardButton("💳 Top-ups"), KeyboardButton("📢 Announcements")],
+     [KeyboardButton("💳 Top-ups"), KeyboardButton("📢 Global announcement")],
      [KeyboardButton("⚡ Zentry API"), KeyboardButton("🛡️ Key control")],
      [KeyboardButton("📊 Statistics"), KeyboardButton("🌐 Language / Idioma")]],
     resize_keyboard=True,
@@ -358,32 +358,6 @@ async def show_buy(update: Update) -> None:
             reply_markup=product_buttons("buy", user_id=update.effective_user.id, custom_icons=False),
             parse_mode=ParseMode.HTML,
         )
-    for product in db.products_for_user(update.effective_user.id)[:10]:
-        media = db.product_media(product["id"])
-        cover, cover_name = product_cover(product, media)
-        if not cover:
-            continue
-        photo = io.BytesIO(cover)
-        photo.name = cover_name
-        try:
-            await update.effective_message.reply_photo(
-                photo,
-                caption=f"💎 <b>{product_name_html(product)}</b>\n💵 {money(product['effective_price_cents'])} · "
-                        f"⏳ {product['duration_days']} días · 🔑 Stock {product['stock']}",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Ver producto", callback_data=f"buy:{product['id']}")]]),
-            )
-        except BadRequest as exc:
-            if "emoji" not in str(exc).lower():
-                log.warning("No se pudo mostrar foto del producto %s: %s", product["id"], exc)
-                continue
-            photo.seek(0)
-            await update.effective_message.reply_photo(
-                photo, caption=f"💎 {product['name']} · {money(product['effective_price_cents'])}",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Ver producto", callback_data=f"buy:{product['id']}")]]),
-            )
-        except Exception as exc:
-            log.warning("No se pudo mostrar foto del producto %s: %s", product["id"], exc)
 
 
 async def show_products_admin(update: Update) -> None:
@@ -965,12 +939,12 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif admin_panel and user["role"] == "admin" and text in ("➕ Crear socio", "➕ Create partner"):
         context.user_data["flow"] = {"name": "partner_create_login"}
         await update.effective_message.reply_text("👤 Escribe el usuario para el socio:")
-    elif admin_panel and user["role"] == "admin" and text in ("📢 Anuncios", "📢 Announcements"):
+    elif admin_panel and user["role"] == "admin" and text in ("📢 Anuncio global", "📢 Global announcement", "📢 Anuncios", "📢 Announcements"):
         current = db.daily_announcement()
         status = (f"{'🟢 Activo' if current['enabled'] else '⏸️ Pausado'} · {current['send_time']} (Nueva York)"
                   if current else "Sin anuncio diario")
         await update.effective_message.reply_text(
-            f"📢 <b>Anuncios a vendedores</b>\n{status}\n\nEl anuncio diario admite texto, emojis y emoticones.",
+            f"📢 <b>Anuncio global · todos los vendedores</b>\n{status}\n\nEnvía ahora texto, foto o video; o programa un anuncio diario con texto, emojis y emoticones.",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📤 Enviar ahora", callback_data="announcement:now")],
