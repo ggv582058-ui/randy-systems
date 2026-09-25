@@ -27,6 +27,8 @@ class Settings:
     database_path: Path
     store_name: str
     support_username: str
+    zelle_number: str
+    zelle_holder: str
     key_api_url: str
     key_api_token: str
     zentry_base_url: str
@@ -67,6 +69,8 @@ def load_settings() -> Settings:
         database_path=db_path,
         store_name=os.getenv("STORE_NAME", "RANDY RESELLER SYSTEMS").strip(),
         support_username=os.getenv("SUPPORT_USERNAME", "@Randy_zt").strip(),
+        zelle_number=os.getenv("ZELLE_NUMBER", "").strip(),
+        zelle_holder=os.getenv("ZELLE_HOLDER", "").strip(),
         key_api_url=os.getenv("KEY_API_URL", "").strip(),
         key_api_token=os.getenv("KEY_API_TOKEN", "").strip(),
         zentry_base_url=os.getenv("ZENTRY_BASE_URL", "https://api.zentryauth.com").strip().rstrip("/"),
