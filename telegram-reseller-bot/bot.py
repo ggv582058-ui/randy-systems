@@ -91,6 +91,47 @@ USER_MENU_EN = ReplyKeyboardMarkup(
      [KeyboardButton("🆘 Support"), KeyboardButton("🌐 Language / Idioma")]],
     resize_keyboard=True,
 )
+
+
+def announcement_panel(now: datetime | None = None) -> str:
+    """Show the next local send and a countdown for the admin panel."""
+    now = now or datetime.now(ZoneInfo("America/New_York"))
+    rows = db.scheduled_announcements()
+    active = []
+    for row in rows:
+        if not row["enabled"]:
+            continue
+        scheduled = datetime.combine(now.date(), datetime.strptime(row["send_time"], "%H:%M").time(),
+                                     tzinfo=now.tzinfo)
+        if scheduled <= now:
+            scheduled += timedelta(days=1)
+        active.append((scheduled, row))
+    schedule_list = " · ".join(f"{'🟢' if row['enabled'] else '⏸️'} {row['send_time']}"
+                                for row in rows) or "Sin horarios"
+    if not active:
+        next_send = "⏸️ No hay envíos activos."
+    else:
+        scheduled, _ = min(active, key=lambda item: item[0].astimezone(timezone.utc))
+        remaining = max(0, int((scheduled.astimezone(timezone.utc) - now.astimezone(timezone.utc)).total_seconds()))
+        hours, minutes = divmod((remaining + 59) // 60, 60)
+        day = "hoy" if scheduled.date() == now.date() else "mañana"
+        next_send = (f"📨 <b>Próximo envío:</b> {day} a las <b>{scheduled:%H:%M}</b>\n"
+                     f"⏳ <b>Faltan:</b> {hours} h {minutes:02d} min")
+    return ("📢 <b>Anuncio global · todos los vendedores</b>\n"
+            f"{next_send}\n\n🕒 <b>Todos los días · Nueva York</b>\n{schedule_list}\n\n"
+            "📷 Foto + 🎬 video + ⚠️ pasos del parche en cada aviso.\n"
+            "Toca «Actualizar tiempo» para consultar la cuenta regresiva.")
+
+
+def announcement_buttons() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Actualizar tiempo", callback_data="announcement:refresh")],
+        [InlineKeyboardButton("👁️ Ver aviso antes de enviar", callback_data="announcement:preview")],
+        [InlineKeyboardButton("📤 Enviar ahora", callback_data="announcement:now")],
+        [InlineKeyboardButton("🗓️ Programar diario", callback_data="announcement:daily")],
+        [InlineKeyboardButton("⏸️ Pausar diario", callback_data="announcement:pause")],
+        [InlineKeyboardButton("▶️ Reactivar diario", callback_data="announcement:resume")],
+    ])
 CERTIFICATE_MENU = ReplyKeyboardMarkup(
     [[KeyboardButton("👋 Welcome!")],
      [KeyboardButton("🍎 Certificado iOS")],
@@ -1014,19 +1055,10 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context.user_data["flow"] = {"name": "partner_create_login"}
         await update.effective_message.reply_text("👤 Escribe el usuario para el socio:")
     elif admin_panel and user["role"] == "admin" and text in ("📢 Anuncio global", "📢 Global announcement", "📢 Anuncios", "📢 Announcements"):
-        schedules = db.scheduled_announcements()
-        status = ("Horarios (Nueva York): " + ", ".join(
-            f"{'🟢' if row['enabled'] else '⏸️'} {row['send_time']}" for row in schedules
-        )) if schedules else "Sin anuncios diarios"
         await update.effective_message.reply_text(
-            f"📢 <b>Anuncio global · todos los vendedores</b>\n{status}\n\nLos avisos diarios incluyen la foto y el video. Puedes editar el texto de un horario sin borrar los demás.",
+            announcement_panel(),
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📤 Enviar ahora", callback_data="announcement:now")],
-                [InlineKeyboardButton("🗓️ Programar diario", callback_data="announcement:daily")],
-                [InlineKeyboardButton("⏸️ Pausar diario", callback_data="announcement:pause")],
-                [InlineKeyboardButton("▶️ Reactivar diario", callback_data="announcement:resume")],
-            ]),
+            reply_markup=announcement_buttons(),
         )
     elif admin_panel and user["role"] == "admin" and text in ("👥 Revendedores", "👥 Resellers"):
         await show_resellers(update)
@@ -1901,16 +1933,34 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         action = data.split(":", 1)[1]
         if action == "pause":
             db.pause_daily_announcement()
-            await query.message.reply_text("⏸️ Todos los anuncios diarios pausados.")
         elif action == "resume":
             db.resume_daily_announcements()
-            await query.message.reply_text("▶️ Anuncios diarios reactivados.")
+        elif action == "preview":
+            rows = db.scheduled_announcements()
+            if not rows:
+                await query.message.reply_text("Todavía no hay avisos programados.")
+                return
+            media_dir = Path(__file__).resolve().parent / "announcement-media"
+            await context.bot.send_media_group(query.from_user.id, media=[
+                InputMediaPhoto(io.BytesIO((media_dir / "aimbot-avatar.jpg").read_bytes()),
+                                caption="👁️ VISTA PREVIA · Solo tú ves esto\n\n" + rows[0]["body"]),
+                InputMediaVideo(io.BytesIO((media_dir / "aimbot-avatar.mp4").read_bytes())),
+            ])
+        elif action == "refresh":
+            pass
         elif action == "daily":
             context.user_data["flow"] = {"name": "daily_announcement_text"}
             await query.message.reply_text("🗓️ Envía el texto diario. Puedes incluir emojis y emoticones como :) o :D")
         elif action == "now":
             context.user_data["flow"] = {"name": "broadcast"}
             await query.message.reply_text("📤 Envía el mensaje, foto o archivo para todos los socios ahora.")
+        if action in ("pause", "resume", "refresh"):
+            try:
+                await query.edit_message_text(announcement_panel(), parse_mode=ParseMode.HTML,
+                                              reply_markup=announcement_buttons())
+            except BadRequest as exc:
+                if "Message is not modified" not in str(exc):
+                    raise
         return
 
     if data.startswith("product:editfield:"):
