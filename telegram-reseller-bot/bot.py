@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, MessageEntity, ReplyKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, KeyboardButton, MessageEntity, ReplyKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
@@ -1014,16 +1014,18 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context.user_data["flow"] = {"name": "partner_create_login"}
         await update.effective_message.reply_text("👤 Escribe el usuario para el socio:")
     elif admin_panel and user["role"] == "admin" and text in ("📢 Anuncio global", "📢 Global announcement", "📢 Anuncios", "📢 Announcements"):
-        current = db.daily_announcement()
-        status = (f"{'🟢 Activo' if current['enabled'] else '⏸️ Pausado'} · {current['send_time']} (Nueva York)"
-                  if current else "Sin anuncio diario")
+        schedules = db.scheduled_announcements()
+        status = ("Horarios (Nueva York): " + ", ".join(
+            f"{'🟢' if row['enabled'] else '⏸️'} {row['send_time']}" for row in schedules
+        )) if schedules else "Sin anuncios diarios"
         await update.effective_message.reply_text(
-            f"📢 <b>Anuncio global · todos los vendedores</b>\n{status}\n\nEnvía ahora texto, foto o video; o programa un anuncio diario con texto, emojis y emoticones.",
+            f"📢 <b>Anuncio global · todos los vendedores</b>\n{status}\n\nLos avisos diarios incluyen la foto y el video. Puedes editar el texto de un horario sin borrar los demás.",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📤 Enviar ahora", callback_data="announcement:now")],
                 [InlineKeyboardButton("🗓️ Programar diario", callback_data="announcement:daily")],
                 [InlineKeyboardButton("⏸️ Pausar diario", callback_data="announcement:pause")],
+                [InlineKeyboardButton("▶️ Reactivar diario", callback_data="announcement:resume")],
             ]),
         )
     elif admin_panel and user["role"] == "admin" and text in ("👥 Revendedores", "👥 Resellers"):
@@ -1899,7 +1901,10 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         action = data.split(":", 1)[1]
         if action == "pause":
             db.pause_daily_announcement()
-            await query.message.reply_text("⏸️ Anuncio diario pausado.")
+            await query.message.reply_text("⏸️ Todos los anuncios diarios pausados.")
+        elif action == "resume":
+            db.resume_daily_announcements()
+            await query.message.reply_text("▶️ Anuncios diarios reactivados.")
         elif action == "daily":
             context.user_data["flow"] = {"name": "daily_announcement_text"}
             await query.message.reply_text("🗓️ Envía el texto diario. Puedes incluir emojis y emoticones como :) o :D")
@@ -2319,19 +2324,25 @@ async def certificate_poll_loop(bot, stop_event: asyncio.Event) -> None:
 
 async def daily_announcement_loop(bot, stop_event: asyncio.Event) -> None:
     new_york = ZoneInfo("America/New_York")
+    media_dir = Path(__file__).resolve().parent / "announcement-media"
     while not stop_event.is_set():
         now = datetime.now(new_york)
-        body = db.claim_daily_announcement(now.date().isoformat(), now.strftime("%H:%M"))
-        if body:
+        due = db.claim_daily_announcements(now.date().isoformat(), now.strftime("%H:%M"))
+        for announcement in due:
             sent = failed = 0
+            photo = (media_dir / "aimbot-avatar.jpg").read_bytes()
+            video = (media_dir / "aimbot-avatar.mp4").read_bytes()
             for target in db.reseller_ids():
                 try:
-                    await bot.send_message(target, body)
+                    await bot.send_media_group(target, media=[
+                        InputMediaPhoto(io.BytesIO(photo), caption=announcement["body"]),
+                        InputMediaVideo(io.BytesIO(video)),
+                    ])
                     sent += 1
                 except Exception as exc:
                     failed += 1
-                    log.warning("Anuncio diario no entregado a %s: %s", target, exc)
-            log.info("Anuncio diario: %s entregados, %s fallidos", sent, failed)
+                    log.warning("Anuncio %s no entregado a %s: %s", announcement["send_time"], target, exc)
+            log.info("Anuncio %s: %s entregados, %s fallidos", announcement["send_time"], sent, failed)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=30)
         except asyncio.TimeoutError:

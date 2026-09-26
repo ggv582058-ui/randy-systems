@@ -8,6 +8,19 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
+from zoneinfo import ZoneInfo
+
+
+AVATAR_NOTICE = (
+    "🚨 RANDY MOD // ADVERTENCIA: AIMBOT AVATAR\n\n"
+    "01 · Carga el avatar al 40 % y aplica el parche.\n"
+    "02 · Al entrar al lobby, desactívalo y restaura el avatar original.\n\n"
+    "⚠️ Estos pasos son obligatorios. Si no los sigues, te arriesgas a un ban de 7 días. "
+    "A esta hora el juego puede sentirse más sencillo: juega con cuidado. "
+    "Cada usuario es responsable de las consecuencias de sus acciones.\n\n"
+    "Revisa Parches antes de jugar."
+)
+AVATAR_NOTICE_TIMES = ("06:00", "15:00", "18:00", "20:00", "22:29")
 
 
 def utcnow() -> str:
@@ -263,6 +276,14 @@ class Database:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS scheduled_announcements (
+                    send_time TEXT PRIMARY KEY,
+                    body TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    last_sent_date TEXT,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_certificate_orders_user
                     ON certificate_orders(user_id, id DESC);
                 CREATE INDEX IF NOT EXISTS idx_certificate_orders_status
@@ -311,6 +332,18 @@ class Database:
                 con.execute("ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'regular'")
             if "language" not in user_columns:
                 con.execute("ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'es'")
+
+            # Insert missing times only. Existing rows and customer data are never overwritten.
+            from datetime import datetime as _datetime
+            local_now = _datetime.now(ZoneInfo("America/New_York"))
+            for send_time in AVATAR_NOTICE_TIMES:
+                con.execute(
+                    """INSERT OR IGNORE INTO scheduled_announcements
+                       (send_time,body,enabled,last_sent_date,updated_at) VALUES(?,?,1,?,?)""",
+                    (send_time, AVATAR_NOTICE,
+                     local_now.date().isoformat() if local_now.strftime("%H:%M") >= send_time else None,
+                     utcnow()),
+                )
 
     def create_partner(self, login: str, password: str, initial_balance_cents: int = 0,
                        target_role: str = "reseller", target_tier: str = "regular") -> None:
@@ -577,29 +610,43 @@ class Database:
         with self.connect() as con:
             return con.execute("SELECT * FROM daily_announcements WHERE id=1").fetchone()
 
+    def scheduled_announcements(self) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            return con.execute("SELECT * FROM scheduled_announcements ORDER BY send_time").fetchall()
+
     def set_daily_announcement(self, body: str, send_time: str, last_sent_date: str | None = None) -> None:
         with self.transaction() as con:
             con.execute(
-                """INSERT INTO daily_announcements(id,body,send_time,enabled,last_sent_date,updated_at)
-                   VALUES(1,?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET
-                   body=excluded.body,send_time=excluded.send_time,enabled=1,
+                """INSERT INTO scheduled_announcements(send_time,body,enabled,last_sent_date,updated_at)
+                   VALUES(?,?,1,?,?) ON CONFLICT(send_time) DO UPDATE SET
+                   body=excluded.body,enabled=1,
                    last_sent_date=excluded.last_sent_date,updated_at=excluded.updated_at""",
-                (body, send_time, last_sent_date, utcnow()),
+                (send_time, body, last_sent_date, utcnow()),
             )
 
     def pause_daily_announcement(self) -> None:
         with self.transaction() as con:
-            con.execute("UPDATE daily_announcements SET enabled=0,updated_at=? WHERE id=1", (utcnow(),))
+            con.execute("UPDATE scheduled_announcements SET enabled=0,updated_at=?", (utcnow(),))
 
-    def claim_daily_announcement(self, local_date: str, local_time: str) -> str | None:
+    def resume_daily_announcements(self) -> None:
+        local_now = datetime.now(ZoneInfo("America/New_York"))
         with self.transaction() as con:
-            row = con.execute("SELECT body FROM daily_announcements WHERE id=1 AND enabled=1 "
-                              "AND send_time<=? AND (last_sent_date IS NULL OR last_sent_date<>?)",
-                              (local_time, local_date)).fetchone()
-            if row:
-                con.execute("UPDATE daily_announcements SET last_sent_date=? WHERE id=1", (local_date,))
-                return row["body"]
-        return None
+            con.execute(
+                """UPDATE scheduled_announcements SET enabled=1,
+                   last_sent_date=CASE WHEN send_time<=? THEN ? ELSE last_sent_date END,
+                   updated_at=?""",
+                (local_now.strftime("%H:%M"), local_now.date().isoformat(), utcnow()),
+            )
+
+    def claim_daily_announcements(self, local_date: str, local_time: str) -> list[sqlite3.Row]:
+        with self.transaction() as con:
+            rows = con.execute("SELECT send_time,body FROM scheduled_announcements WHERE enabled=1 "
+                               "AND send_time<=? AND (last_sent_date IS NULL OR last_sent_date<>?) "
+                               "ORDER BY send_time", (local_time, local_date)).fetchall()
+            for row in rows:
+                con.execute("UPDATE scheduled_announcements SET last_sent_date=? WHERE send_time=?",
+                            (local_date, row["send_time"]))
+            return rows
 
     def products(self, active_only: bool = True) -> list[sqlite3.Row]:
         where = "WHERE p.active=1" if active_only else ""

@@ -48,15 +48,24 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(reopened.certificate_offer_photo(), b"certificate-photo")
 
     def test_daily_announcement_claims_once_and_survives_restart(self):
+        self.assertEqual([row["send_time"] for row in self.db.scheduled_announcements()],
+                         ["06:00", "15:00", "18:00", "20:00", "22:29"])
         self.db.set_daily_announcement("💎 Hola :D", "10:30")
-        self.assertIsNone(self.db.claim_daily_announcement("2026-09-25", "10:29"))
-        self.assertEqual(self.db.claim_daily_announcement("2026-09-25", "10:30"), "💎 Hola :D")
-        self.assertIsNone(self.db.claim_daily_announcement("2026-09-25", "10:31"))
+        self.assertEqual([row["send_time"] for row in self.db.scheduled_announcements()],
+                         ["06:00", "10:30", "15:00", "18:00", "20:00", "22:29"])
+        before = self.db.claim_daily_announcements("2026-09-25", "10:29")
+        self.assertNotIn("10:30", [row["send_time"] for row in before])
+        due = self.db.claim_daily_announcements("2026-09-25", "10:30")
+        self.assertEqual([(row["send_time"], row["body"]) for row in due], [("10:30", "💎 Hola :D")])
+        self.assertEqual(self.db.claim_daily_announcements("2026-09-25", "10:31"), [])
         restarted = Database(self.db.path)
         restarted.initialize()
-        self.assertEqual(restarted.claim_daily_announcement("2026-09-26", "10:30"), "💎 Hola :D")
+        self.assertEqual(restarted.scheduled_announcements()[1]["body"], "💎 Hola :D")
+        self.assertEqual([(row["send_time"], row["body"]) for row in
+                          restarted.claim_daily_announcements("2026-09-27", "10:30") if row["send_time"] == "10:30"],
+                         [("10:30", "💎 Hola :D")])
         restarted.pause_daily_announcement()
-        self.assertIsNone(restarted.claim_daily_announcement("2026-09-27", "10:30"))
+        self.assertEqual(restarted.claim_daily_announcements("2026-09-28", "10:30"), [])
 
     def test_purchase_is_atomic_and_key_is_unique(self):
         self.credit()
