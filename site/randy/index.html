@@ -7,6 +7,7 @@
   <meta name="description" content="Randy Mod builds bots, digital tools, and community experiences. Explore Randy Systems on Telegram, WhatsApp and iOS.">
   <title>Randy Mod — Developer</title>
   <link rel="preload" href="https://randy-mod-zt.cruz45o.chatgpt.site/assets/hero.webp" as="image">
+  <link rel="preload" href="https://randy-mod-zt.cruz45o.chatgpt.site/assets/hero-wink.webp" as="image">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23050b1b'/%3E%3Cpath d='M14 44V20h17c15 0 16 18 3 21l11 9' fill='none' stroke='%233dabff' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E">
   <style>
     :root{color-scheme:dark;--ink:#f4f9ff;--muted:#b8c7e2;--blue:#57bbff}
@@ -88,8 +89,8 @@
     @keyframes art-arrive{from{opacity:.3;transform:scale(1.035)}to{opacity:1;transform:scale(1)}}
     .character-effects{position:fixed;inset:0;z-index:0;pointer-events:none;transform-origin:50% 45%;animation:scene-orbit 17s ease-in-out infinite alternate}
     .eye-patch{position:absolute;z-index:4;left:var(--art-left,0px);top:var(--art-top,0px);width:1000px;height:1776px;background:url('https://randy-mod-zt.cruz45o.chatgpt.site/assets/hero-wink.webp') 0 0/100% 100% no-repeat;transform:scale(var(--art-scale,1));transform-origin:top left;mask-image:radial-gradient(ellipse 67px 51px at 712px 185px,#000 50%,transparent 100%);opacity:0;pointer-events:none}
-    .eye-running .character-effects .eye-patch,.art-dialog.play-eye .eye-patch{animation:eye-open-close 4s ease-in-out .1s 1 both}
-    @keyframes eye-open-close{0%,8%,85%,100%{opacity:0}24%,68%{opacity:1}}
+    .eye-running .character-effects .eye-patch,.art-dialog.play-eye .eye-patch{animation:eye-open-close 7.5s ease-in-out .2s 1 both}
+    @keyframes eye-open-close{0%,10%,87%,100%{opacity:0}22%,72%{opacity:1}}
     .scene{z-index:0;background-image:url('https://randy-mod-zt.cruz45o.chatgpt.site/assets/hero.webp');pointer-events:none}
     .scene:after{z-index:1}
     .shirt-aura{position:absolute;z-index:2;left:var(--art-left,0px);top:var(--art-top,0px);width:1000px;height:1776px;transform:scale(var(--art-scale,1));transform-origin:top left;filter:drop-shadow(0 0 23px #ff263d) drop-shadow(0 0 58px #df124cbf);animation:aura-breathe 2.7s ease-in-out infinite alternate;pointer-events:none}
@@ -99,7 +100,7 @@
     @keyframes aura-breathe{0%{opacity:.62}52%{opacity:1}100%{opacity:.74}}
     .ember-field{position:absolute;z-index:3;left:var(--art-left,0px);top:var(--art-top,0px);width:1000px;height:1776px;transform:scale(var(--art-scale,1));transform-origin:top left}.ember-field span{position:absolute;width:9px;height:17px;border-radius:50%;background:radial-gradient(circle at 40% 60%,#fff4c7,#ff6577 42%,#e0043b 76%,transparent);box-shadow:0 0 12px 5px #ff345fce;animation:ember-rise var(--ember-duration) ease-out var(--ember-delay) infinite}@keyframes ember-rise{0%{transform:translate3d(0,12px,0) scale(.6);opacity:0}25%{opacity:.95}78%{opacity:.67}100%{transform:translate3d(var(--ember-drift),-61px,0) scale(.2);opacity:0}}
     .luffy-focus{display:none}
-    @media(min-width:760px){.luffy-focus{display:block;position:absolute;top:-18px;right:clamp(25px,7vw,125px);width:clamp(340px,35vw,520px);height:350px;overflow:hidden;background:url('https://randy-mod-zt.cruz45o.chatgpt.site/assets/hero.webp') center top/100% auto no-repeat;mask-image:radial-gradient(ellipse 75% 93% at 61% 35%,#000 53%,transparent 100%);--art-left:0px;--art-top:0px}.luffy-focus .shirt-aura,.luffy-focus .eye-patch,.luffy-focus .ember-field{left:0;top:0;transform:scale(var(--focus-scale,.5))}}
+    @media(min-width:760px){.luffy-focus{display:block;position:absolute;top:-18px;right:clamp(25px,7vw,125px);width:clamp(340px,35vw,520px);height:350px;overflow:hidden;background:url('https://randy-mod-zt.cruz45o.chatgpt.site/assets/hero.webp') center top/100% auto no-repeat;mask-image:radial-gradient(ellipse 65% 78% at 53% 28%,#000 0 38%,#000c 54%,transparent 82%);--art-left:0px;--art-top:0px}.luffy-focus .shirt-aura,.luffy-focus .eye-patch,.luffy-focus .ember-field{left:0;top:0;transform:scale(var(--focus-scale,.5))}}
     .smoke-field{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}.smoke-field img{position:absolute;bottom:52svh;width:clamp(205px,33vw,410px);height:auto;opacity:.78;filter:drop-shadow(0 0 12px #1b7ed9) drop-shadow(0 0 22px #b9edff);animation:smoke-rise 7s ease-in-out infinite alternate}.smoke-field img:first-child{left:10%;bottom:51svh;animation-delay:-2s}.smoke-field img:last-child{right:0;bottom:49svh;width:clamp(170px,28vw,330px);animation-duration:9s;animation-delay:-5s}@keyframes smoke-rise{from{transform:translate3d(-12px,38px,0) scale(.92) rotate(-7deg);opacity:.12}42%{opacity:.88}to{transform:translate3d(14px,-58px,0) scale(1.18) rotate(7deg);opacity:.6}}
     .cloud-sky{position:fixed;inset:0 0 auto;height:46svh;z-index:0;overflow:hidden;pointer-events:none;mask-image:linear-gradient(#000 55%,transparent 100%)}.cloud-sky img{position:absolute;top:0;width:clamp(250px,45vw,520px);opacity:.75;filter:blur(1px) drop-shadow(0 0 13px #0d6fd4) drop-shadow(0 0 26px #d5f6ff);animation:cloud-drift 14s ease-in-out infinite alternate}.cloud-sky img:first-child{left:-8%}.cloud-sky img:last-child{right:-13%;top:8svh;opacity:.65;animation-delay:-6s;animation-duration:18s}@keyframes cloud-drift{from{transform:translateX(-36px) rotate(83deg) scale(1.05)}to{transform:translateX(65px) rotate(93deg) scale(1.22)}}
     .petal-field{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}.petal-field .petal{position:absolute;left:var(--petal-left);top:var(--petal-top);width:var(--petal-size);height:var(--petal-size);overflow:hidden;opacity:0;animation:petal-drift var(--petal-duration) ease-in-out var(--petal-delay) infinite}.petal-field .petal img{position:absolute;left:-77%;top:-30%;width:250%;max-width:none;height:auto;filter:drop-shadow(0 0 4px #fbb9e1)}.petal-field .petal.blue img{filter:hue-rotate(115deg) saturate(1.5) drop-shadow(0 0 5px #83dcff)}@keyframes petal-drift{0%{transform:translate3d(0,-5vh,0) rotate(0deg);opacity:0}15%{opacity:.95}65%{opacity:.8}100%{transform:translate3d(var(--petal-travel),32vh,0) rotate(var(--petal-spin));opacity:0}}
@@ -166,11 +167,11 @@
     const entry=document.getElementById('entry'),accessToast=document.getElementById('accessToast');let assignedAccess=false,wantsToast=false;
     function showAccessToast(){wantsToast=true;if(!assignedAccess)return;accessToast.classList.add('show');setTimeout(()=>accessToast.classList.remove('show'),7600)}
     async function registerAccess(){try{const response=await fetch('/randy/api/access',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw new Error('Access sequence unavailable');const result=await response.json();if(!Number.isSafeInteger(result.accessId))return;const fullNumber=result.accessId.toLocaleString('en-US'),accessLabel='#'+fullNumber;document.getElementById('accessNumber').textContent=accessLabel;const badge=document.getElementById('accessBadge');badge.textContent='YOUR ACCESS '+accessLabel;badge.classList.add('show');document.getElementById('accessLongNumber').textContent=fullNumber;document.getElementById('accessLong').classList.add('show');assignedAccess=true;if(wantsToast)showAccessToast()}catch(error){console.warn('Access sequence unavailable',error)}}
-    void registerAccess();setTimeout(()=>restartEye(document.body,'eye-running'),650);
+    void registerAccess();
     document.getElementById('enterButton').addEventListener('click',()=>{restartEye(document.body,'eye-running');audio.play().then(updateSound).catch(updateSound);entry.classList.add('is-hidden');setTimeout(()=>{entry.remove();showAccessToast()},650)});
     button.addEventListener('click',()=>{audio.paused?tryPlay():(audio.pause(),updateSound())});
     audio.addEventListener('play',updateSound);audio.addEventListener('pause',updateSound);
-    window.addEventListener('load',tryPlay,{once:true});
+    window.addEventListener('load',()=>{tryPlay();setTimeout(()=>restartEye(document.body,'eye-running'),600)},{once:true});
   </script>
 </body>
 </html>
