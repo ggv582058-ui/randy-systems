@@ -125,7 +125,7 @@ async def reliable_submit_certificate_order(message, context, user_id: int) -> N
             return
         try:
             await message.reply_text(
-                "🔄 <b>Pedido recuperado</b>\nChungChi sí lo recibió. Ya volví a enlazarlo y seguiré revisándolo automáticamente.",
+                "🔄 <b>Pedido recuperado</b>\nTu certificado ya está vinculado y seguiré revisándolo automáticamente.",
                 parse_mode="HTML",
             )
         except Exception:

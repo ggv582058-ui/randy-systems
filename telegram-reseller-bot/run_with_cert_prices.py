@@ -125,12 +125,12 @@ async def show_certificate_offer(update):
         )
     except ChungChiError as exc:
         await loading.edit_text(
-            f"⚠️ No pude verificar ChungChi: {html.escape(str(exc))}", parse_mode=ParseMode.HTML
+            "⚠️ No pude verificar el servicio de certificados. Inténtalo más tarde.", parse_mode=ParseMode.HTML
         )
         return
     plan = next((p for p in plans if int(p.get("id", -1)) == bot.settings.chungchi_plan_id), None)
     if not plan:
-        await loading.edit_text("⚠️ El plan configurado no está disponible en ChungChi.")
+        await loading.edit_text("⚠️ Este plan de certificado no está disponible en este momento.")
         return
     provider_balance = float(balance.get("wallet", 0) or 0)
     provider_cost = float(plan.get("amount", 0) or 0)

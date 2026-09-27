@@ -557,11 +557,11 @@ async def show_certificate_offer(update: Update) -> None:
             asyncio.to_thread(chungchi.plans), asyncio.to_thread(chungchi.balance)
         )
     except ChungChiError as exc:
-        await update.effective_message.reply_text(f"⚠️ No pude verificar ChungChi: {html.escape(str(exc))}", parse_mode=ParseMode.HTML)
+        await update.effective_message.reply_text("⚠️ No pude verificar el servicio de certificados. Inténtalo más tarde.", parse_mode=ParseMode.HTML)
         return
     plan = next((p for p in plans if int(p.get("id", -1)) == settings.chungchi_plan_id), None)
     if not plan:
-        await update.effective_message.reply_text("⚠️ El plan configurado no está disponible en ChungChi.")
+        await update.effective_message.reply_text("⚠️ Este plan de certificado no está disponible en este momento.")
         return
     provider_balance = float(balance.get("wallet", 0) or 0)
     provider_cost = float(plan.get("amount", 0) or 0)
@@ -726,7 +726,7 @@ async def submit_certificate_order(message, context: ContextTypes.DEFAULT_TYPE, 
     status_link = f"{base_url}/certificate/install/{install_token}"
     status_buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Ver estado privado", url=status_link)]]) if base_url.startswith("https://") else None
     status_message = await message.reply_text(
-        "⏳ Registrando el pedido con ChungChi. Puedes ver el estado aquí mientras se prepara.",
+        "⏳ Registrando tu certificado. Puedes ver su estado mientras se prepara.",
         reply_markup=status_buttons,
     )
     try:
@@ -738,9 +738,9 @@ async def submit_certificate_order(message, context: ContextTypes.DEFAULT_TYPE, 
         release = exc.status is not None and exc.status < 500 and exc.status != 429
         db.mark_certificate_error(local["id"], str(exc), release)
         if release:
-            await status_message.edit_text(f"❌ {html.escape(str(exc))}\nTu key no fue consumida.", parse_mode=ParseMode.HTML)
+            await status_message.edit_text("❌ No se pudo crear el certificado. Tu key no fue consumida.")
         else:
-            await status_message.edit_text("⚠️ ChungChi no confirmó el pedido. Lo dejé en verificación para evitar un cobro duplicado.")
+            await status_message.edit_text("⚠️ El pedido necesita verificación. Lo revisaré antes de cualquier reintento para evitar un cobro duplicado.")
         return
     await status_message.edit_text(certificate_status_text(order), parse_mode=ParseMode.HTML, reply_markup=status_buttons)
     if order["status"] == "completed":

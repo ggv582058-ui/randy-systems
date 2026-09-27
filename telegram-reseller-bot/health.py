@@ -47,6 +47,15 @@ class BotHTTPServer(ThreadingHTTPServer):
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
+        if path == "/certificate/tutorial":
+            data = (Path(__file__).parent / "certificate-tutorial.mp4").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if path == "/certificate/music":
             data = (Path(__file__).parent / "certificate-ambient.m4a").read_bytes()
             self.send_response(200)
