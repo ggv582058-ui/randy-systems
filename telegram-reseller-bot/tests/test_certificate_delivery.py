@@ -13,7 +13,7 @@ import certificate_experience as experience
 
 
 class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_delivery_orders_status_files_app_and_web_last(self):
+    async def test_delivery_waits_for_get_certificate_then_offers_mini_app(self):
         order = {
             "id": 41, "user_id": 123, "status": "completed", "download_url": "https://provider.test/private",
             "display_name": "Test User", "udid": "00008101-001C6D642268801E", "device": "iphone",
@@ -36,14 +36,21 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
              patch.dict("os.environ", {"RENDER_EXTERNAL_URL": "https://example.test"}):
             await experience.deliver(client, order)
 
-        self.assertEqual([item[0] for item in events], ["message", "documents", "message", "app"])
+        self.assertEqual([item[0] for item in events], ["message"])
         self.assertIn("Garantía estimada", events[0][1][1])
-        documents = events[1][1][1]
-        self.assertEqual([item.caption for item in documents], ["Certificado P12", "MobileProvision"])
+        self.assertEqual(events[0][2]["reply_markup"].inline_keyboard[0][0].callback_data, "certapp:replay:41")
+        with patch.object(bot.chungchi, "download", return_value=archive.getvalue()), \
+             patch.object(bot.db, "certificate_logo", return_value=None), \
+             patch.object(bot.db, "signed_certificate_app", return_value=None), \
+             patch.dict("os.environ", {"RENDER_EXTERNAL_URL": "https://example.test"}):
+            await experience.send_files(client, order)
+            await experience.send_app_choice(client, order)
+        self.assertEqual([item[0] for item in events], ["message", "documents", "message", "app"])
+        self.assertEqual([item.caption for item in events[1][1][1]], ["Certificado P12", "MobileProvision"])
         self.assertIn("secret", events[2][1][1])
         buttons = events[3][2]["reply_markup"].inline_keyboard
         self.assertEqual(buttons[0][0].callback_data, "certapp:sign_gbox:41")
-        self.assertEqual(buttons[1][0].callback_data, "certapp:import_gbox:41")
+        self.assertIn("/certificate/mini/private?app=gbox", buttons[1][0].web_app.url)
         self.assertIn("/certificate/install/private", buttons[-1][0].url)
         marked.assert_called_once_with(41)
 

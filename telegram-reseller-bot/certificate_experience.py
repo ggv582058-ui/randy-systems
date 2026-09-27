@@ -10,7 +10,7 @@ import urllib.request
 import zipfile
 from PIL import Image, ImageOps
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument, WebAppInfo
 from telegram.constants import ParseMode
 
 import bot
@@ -19,6 +19,15 @@ from certificate_card import app_tile
 
 log = bot.log
 APPS = {"gbox": "GBox", "esign": "ESign"}
+STATUS_ICONS = (
+    ("✓ Estado:", "5931409969613116639", "✅ Estado:"),
+    ("◈ Nombre:", "5942826671290715541", "👤 Nombre:"),
+    ("⌗ UDID:", "5877540355187937244", "🆔 UDID:"),
+    ("▣ Registrado:", "5967782394080530708", "📅 Registrado:"),
+    ("◷ Garantía estimada:", "5778139491810155937", "🛡️ Garantía estimada:"),
+    ("⚡ Plan:", "5278343321624787703", "⚡ Plan:"),
+    ("▯ Equipo:", "5776375003280838798", "📱 Equipo:"),
+)
 _busy = set()
 _retry_after = {}
 _signing = set()
@@ -26,6 +35,20 @@ _signing = set()
 
 def _safe(value):
     return re.sub(r"[^A-Za-z0-9._ -]+", "_", value or "certificate").strip(" ._")[:80] or "certificate"
+
+
+async def send_status(tg_bot, order, reply_markup=None):
+    plain = bot.certificate_status_text(order)
+    decorated = plain
+    for original, emoji_id, replacement in STATUS_ICONS:
+        symbol, label = replacement.split(" ", 1)
+        decorated = decorated.replace(original, f'<tg-emoji emoji-id="{emoji_id}">{symbol}</tg-emoji> {label}')
+    try:
+        await tg_bot.send_message(order["user_id"], decorated, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+    except Exception as exc:
+        if decorated == plain or "emoji" not in str(exc).lower():
+            raise
+        await tg_bot.send_message(order["user_id"], plain, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
 
 def install_page(base: str, order, kind: str) -> str:
@@ -55,12 +78,20 @@ def _components(data):
 
 def delivery_menu(order):
     order_id = int(order["id"])
-    rows = [[InlineKeyboardButton("Ver entrega completa", callback_data=f"certapp:replay:{order_id}")],
-            [InlineKeyboardButton("GBox", callback_data=f"certapp:gbox:{order_id}"),
-             InlineKeyboardButton("ESign", callback_data=f"certapp:esign:{order_id}")]]
+    return InlineKeyboardMarkup([[InlineKeyboardButton("Obtener certificado", callback_data=f"certapp:replay:{order_id}")]])
+
+
+def app_menu(order, kind="gbox"):
     base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    order_id = int(order["id"])
+    signed = bot.db.signed_certificate_app(order_id, kind)
+    rows = []
+    if not signed:
+        rows.append([InlineKeyboardButton(f"Preparar {APPS[kind]}", callback_data=f"certapp:sign_{kind}:{order_id}")])
     if base.startswith("https://"):
-        rows.append([InlineKeyboardButton("Abrir mi página privada", url=f"{base}/certificate/install/{order['install_token']}")])
+        rows.append([InlineKeyboardButton(f"Abrir {APPS[kind]}",
+                                         web_app=WebAppInfo(f"{base}/certificate/mini/{order['install_token']}?app={kind}"))])
+        rows.append([InlineKeyboardButton("Mi certificado en la web", url=f"{base}/certificate/install/{order['install_token']}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -100,19 +131,9 @@ async def send_app_choice(tg_bot, order, kind="gbox"):
     name = APPS[kind]
     picture = io.BytesIO(app_tile(bot.db.certificate_logo(kind), name))
     picture.name = f"{kind}-app.jpg"
-    order_id = int(order["id"])
-    base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
-    signed = bot.db.signed_certificate_app(order_id, kind)
-    install = (InlineKeyboardButton(f"Instalar {name} · Safari", url=install_page(base, order, kind))
-               if signed and base.startswith("https://") else
-               InlineKeyboardButton(f"Preparar {name} para instalar", callback_data=f"certapp:sign_{kind}:{order_id}"))
-    rows = [[install], [InlineKeyboardButton(f"Usar P12 y perfil en {name}", callback_data=f"certapp:import_{kind}:{order_id}")]]
-    if base.startswith("https://"):
-        rows.append([InlineKeyboardButton("Mi certificado en la web", url=f"{base}/certificate/install/{order['install_token']}")])
     await tg_bot.send_photo(order["user_id"], picture,
-        caption=f"<b>{name}</b> · Toca Preparar para firmar la app con tu certificado. "
-                "Cuando esté lista, usa Instalar desde Safari.",
-        reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+        caption=f"<b>{name}</b> · Abre tu instalación privada. Si todavía no está firmada, toca Preparar {name}.",
+        reply_markup=app_menu(order, kind), parse_mode=ParseMode.HTML)
 
 
 async def deliver(tg_bot, order):
@@ -123,9 +144,7 @@ async def deliver(tg_bot, order):
         return
     _busy.add(order_id)
     try:
-        await tg_bot.send_message(order["user_id"], bot.certificate_status_text(order), parse_mode=ParseMode.HTML)
-        await send_files(tg_bot, order)
-        await send_app_choice(tg_bot, order)
+        await send_status(tg_bot, order, reply_markup=delivery_menu(order))
         bot.db.mark_certificate_delivered(order_id)
         _retry_after.pop(order_id, None)
     except Exception as exc:
@@ -163,9 +182,7 @@ async def certificate_callback(update, context):
             return
         if bot.db.signed_certificate_app(order_id, kind):
             await query.answer("Ya está preparada")
-            await query.message.reply_text(f"✅ {APPS[kind]} está lista. Abre en Safari y toca Instalar.",
-                                           reply_markup=InlineKeyboardMarkup([[
-                                               InlineKeyboardButton(f"Instalar {APPS[kind]} · Safari", url=install_page(base, order, kind))]]))
+            await query.message.reply_text(f"✅ {APPS[kind]} está lista para instalar.", reply_markup=app_menu(order, kind))
             return
         if key in _signing:
             await query.answer("La firma ya está en curso", show_alert=True)
@@ -196,16 +213,11 @@ async def certificate_callback(update, context):
             await asyncio.to_thread(bot.db.set_signed_certificate_app, order_id, kind, signed, bundle_id, version)
             await status_message.edit_text(
                 f"✅ <b>{APPS[kind]} v{html.escape(version)} lista para instalar</b>\n"
-                "Abre la página privada en Safari y toca <b>Instalar</b>.",
+                "Abre GBox desde Telegram; si iOS lo solicita, continúa en Safari.",
                 parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton(f"Instalar {APPS[kind]} · Safari", url=install_page(base, order, kind))]]))
+                reply_markup=app_menu(order, kind))
             try:
-                current_rows = query.message.reply_markup.inline_keyboard
-                await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton(f"Instalar {APPS[kind]} desde Safari",
-                                           url=install_page(base, order, kind))]] +
-                    [list(row) for row in current_rows[1:]]))
+                await query.message.edit_reply_markup(reply_markup=app_menu(order, kind))
             except Exception:
                 log.info("No se pudo actualizar el botón de instalación del pedido %s", order_id)
         except SigningError as exc:
@@ -229,7 +241,6 @@ async def certificate_callback(update, context):
         return
     if action == "replay":
         await query.answer("Enviando tu certificado…")
-        await context.bot.send_message(order["user_id"], bot.certificate_status_text(order), parse_mode=ParseMode.HTML)
         try:
             await send_files(context.bot, order)
             await send_app_choice(context.bot, order)

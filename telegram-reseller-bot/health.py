@@ -81,6 +81,10 @@ class HealthHandler(BaseHTTPRequestHandler):
             focus = parse_qs(urlsplit(self.path).query).get("app", [""])[0]
             self._certificate_page(path.rsplit("/", 1)[-1], focus if focus in ("gbox", "esign") else "")
             return
+        if path.startswith("/certificate/mini/"):
+            focus = parse_qs(urlsplit(self.path).query).get("app", ["gbox"])[0]
+            self._certificate_mini(path.rsplit("/", 1)[-1], focus)
+            return
         if path.startswith("/certificate/cover/"):
             self._certificate_cover(path.rsplit("/", 1)[-1])
             return
@@ -135,6 +139,57 @@ class HealthHandler(BaseHTTPRequestHandler):
             return f"{days}d {hours}h {minutes}m"
         except Exception:
             return "30 días"
+
+    def _certificate_mini(self, token: str, kind: str) -> None:
+        if kind not in ("gbox", "esign"):
+            self.send_error(404)
+            return
+        server: BotHTTPServer = self.server
+        order = server.certificate_lookup(token) if server.certificate_lookup else None
+        if not order or order["status"] != "completed":
+            self.send_error(404, "Enlace privado inválido o expirado")
+            return
+        signed = bool(server.certificate_signed_lookup and server.certificate_signed_lookup(order["id"], kind))
+        base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+        safe_token = html.escape(token, quote=True)
+        name = "GBox" if kind == "gbox" else "ESign"
+        manifest = f"{base}/certificate/manifest/{safe_token}/{kind}.plist"
+        install_url = html.escape("itms-services://?action=download-manifest&url=" + quote(manifest, safe=""), quote=True)
+        page_url = f"{base}/certificate/install/{safe_token}?app={kind}"
+        main_button = (f'<a class="install" href="{install_url}">Instalar {name} <span>↗</span></a>'
+                       if signed and base.startswith("https://") else
+                       '<div class="waiting">La firma de la app aún no está lista. Vuelve al bot y toca <b>Preparar GBox</b>.</div>')
+        safari = (f'<button id="safari" class="safari" type="button">Abrir instalación en Safari ↗</button>'
+                  if signed else '')
+        body = f'''<!doctype html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#061a12"><title>{name} · Randy Mod</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script><style>
+*{{box-sizing:border-box}}html{{background:#04110d}}body{{margin:0;color:#f4fff8;font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh;background:radial-gradient(circle at 50% -15%,#1b9f6466,transparent 55%),linear-gradient(#051d14,#030c0c)}}
+main{{max-width:460px;min-height:100vh;margin:auto;padding:28px 20px calc(36px + env(safe-area-inset-bottom));text-align:center;position:relative}}
+main:before{{content:"";position:absolute;z-index:0;top:30px;left:15%;right:15%;height:260px;opacity:.13;background:url('/certificate/cover/{safe_token}') center/cover;border-radius:50%;filter:blur(28px);pointer-events:none}}
+.brand{{position:relative;text-align:left;font-size:12px;letter-spacing:3px;color:#9cbcaf;font-weight:800}}
+.orb{{position:relative;margin:55px auto 24px;width:154px;height:154px;border-radius:39px;background:linear-gradient(145deg,#12dc80,#026c48);display:grid;place-items:center;box-shadow:0 0 0 13px #49e8a010,0 0 0 35px #49e8a008,0 25px 90px #00c47b55;animation:rise .7s ease both}}.orb img{{width:120px;height:120px;object-fit:cover;border-radius:30px}}@keyframes rise{{from{{opacity:0;transform:scale(.8) translateY(20px)}}to{{opacity:1;transform:scale(1) translateY(0)}}}}
+h1{{font-size:37px;margin:10px 0 2px;letter-spacing:-1px}}.version{{font-size:13px;color:#8caf9c}}.hint{{margin:32px 0 20px;color:#bdd3c4;font-size:14px;line-height:1.55}}.install,.safari{{display:flex;align-items:center;justify-content:center;width:100%;border:0;border-radius:18px;text-decoration:none;font-size:17px;font-weight:750;min-height:58px}}.install{{color:#022a18;background:#30db91;box-shadow:0 10px 34px #04bd7560}}.install span{{position:absolute;right:43px}}.safari{{margin-top:13px;background:#113327;color:#cbf4d9;border:1px solid #3b8f65}}.waiting{{padding:18px;border-radius:16px;background:#133829;color:#cff1d8;line-height:1.5}}.foot{{margin-top:25px;color:#8da69b;font-size:12px;line-height:1.5}}video{{margin-top:20px;width:100%;border-radius:16px;background:#0b2419;max-height:220px}}.video-title{{margin-top:34px;color:#cef1da;text-align:left;font-size:13px;font-weight:700}}.web{{display:block;margin-top:25px;color:#96d7b2;font-size:13px}}
+</style></head><body><main><div class="brand">RANDY MOD / INSTALACIÓN PRIVADA</div>
+<div class="orb"><img src="/certificate/logo/{safe_token}/{kind}" alt="Logo {name}"></div>
+<h1>{name}</h1><div class="version">App privada para tu certificado</div>
+<p class="hint">Tu certificado ya está en Telegram. Instala la app firmada para tu dispositivo y después importa los archivos P12 y MobileProvision.</p>
+{main_button}{safari}
+<div class="video-title">GUÍA RÁPIDA</div><video controls playsinline preload="metadata" poster="/certificate/cover/{safe_token}"><source src="/certificate/tutorial" type="video/mp4">Tu navegador no admite video.</video>
+<a class="web" href="/certificate/install/{safe_token}?app={kind}">Ver mi certificado en la web ↗</a>
+<div class="foot">Enlace privado. Si iOS no abre la instalación desde Telegram, toca «Abrir instalación en Safari».</div>
+</main><script>
+const app=window.Telegram?.WebApp;app?.ready();app?.expand();
+document.getElementById('safari')?.addEventListener('click',()=>{{const link={json.dumps(page_url)};if(app?.openLink)app.openLink(link,{{try_instant_view:false}});else window.open(link,'_blank');}});
+</script></body></html>'''.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "private, no-store")
+        self.send_header("Content-Security-Policy", "default-src 'self' https://telegram.org data:; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://telegram.org; img-src 'self' data:; media-src 'self'")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _certificate_page(self, token: str, focus: str = "") -> None:
         server: BotHTTPServer = self.server

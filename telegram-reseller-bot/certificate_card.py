@@ -68,10 +68,11 @@ def certificate_card(order, logo: bytes | None = None, app: str | None = None) -
 
 def app_tile(logo: bytes | None, name: str = "GBox") -> bytes:
     """Small app listing with a real logo, like a Telegram app preview."""
-    picture = Image.new("RGB", (960, 245), "#050e20")
+    green = name == "GBox"
+    picture = Image.new("RGB", (960, 245), "#061a15" if green else "#06152a")
     draw = ImageDraw.Draw(picture)
-    draw.rounded_rectangle((16, 15, 943, 229), radius=38, fill="#0e2446", outline="#3379b7", width=2)
-    draw.rounded_rectangle((43, 39, 209, 205), radius=34, fill="#063d4c" if name == "GBox" else "#21497a")
+    draw.rounded_rectangle((16, 15, 943, 229), radius=38, fill="#0d4435" if green else "#0e2446", outline="#3ce3a0" if green else "#3379b7", width=3)
+    draw.rounded_rectangle((43, 39, 209, 205), radius=34, fill="#006d4a" if green else "#21497a")
     if logo:
         try:
             with Image.open(io.BytesIO(logo)) as source:
@@ -83,9 +84,9 @@ def app_tile(logo: bytes | None, name: str = "GBox") -> bytes:
             logo = None
     if not logo:
         draw.text((126, 121), name[0], anchor="mm", font=_font(85, True), fill="#99daff")
-    draw.text((246, 59), "INSTALACIÓN PRIVADA", font=_font(21, True), fill="#8dbdec")
+    draw.text((246, 59), "RANDY MOD  /  INSTALACIÓN PRIVADA", font=_font(19, True), fill="#93ffce" if green else "#8dbdec")
     draw.text((244, 94), name, font=_font(54, True), fill="#ffffff")
-    draw.text((246, 164), "Firmar con tu certificado", font=_font(25), fill="#c4dcf5")
+    draw.text((246, 164), "Tu app · tu certificado", font=_font(25), fill="#cdf8e4" if green else "#c4dcf5")
     output = io.BytesIO()
     picture.save(output, format="JPEG", quality=86, optimize=True)
     return output.getvalue()

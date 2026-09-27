@@ -60,6 +60,21 @@ class InstallManifestTests(unittest.TestCase):
         self.assertLess(page.index("Instalar ESign"), page.index("ARCHIVOS DEL CERTIFICADO"))
         self.assertIn('/certificate/logo/private/esign', page)
 
+    def test_private_mini_app_requires_token_and_only_installs_signed_app(self):
+        with patch.dict(os.environ, {"RENDER_EXTERNAL_URL": "https://example.test"}):
+            with urlopen(self.base + "/certificate/mini/private?app=esign") as response:
+                page = response.read().decode()
+            self.assertIn('Instalar ESign', page)
+            self.assertIn('itms-services://', page)
+            self.assertIn('/certificate/logo/private/esign', page)
+            with urlopen(self.base + "/certificate/mini/private?app=gbox") as response:
+                waiting = response.read().decode()
+            self.assertNotIn('itms-services://', waiting)
+            for url in ("/certificate/mini/other", "/certificate/mini/private?app=scarlet"):
+                with self.assertRaises(HTTPError) as failure:
+                    urlopen(self.base + url)
+                self.assertEqual(failure.exception.code, 404)
+
     def test_esign_import_requires_secret_and_validates_source(self):
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as z:

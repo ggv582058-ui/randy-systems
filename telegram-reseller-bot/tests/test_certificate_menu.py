@@ -12,12 +12,11 @@ import certificate_experience
 
 
 class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
-    def test_certificate_menu_only_offers_gbox_and_esign(self):
+    def test_certificate_menu_starts_with_one_delivery_action(self):
         order = {"id": 7, "install_token": "private"}
         buttons = certificate_experience.delivery_menu(order).inline_keyboard
         names = " ".join(button.text for row in buttons for button in row)
-        self.assertIn("GBox", names)
-        self.assertIn("ESign", names)
+        self.assertEqual(names, "Obtener certificado")
         self.assertNotIn("Feather", names)
         self.assertNotIn("Scarlet", names)
         self.assertNotIn("KSign", names)
