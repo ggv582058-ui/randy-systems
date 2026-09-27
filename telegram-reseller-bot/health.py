@@ -7,12 +7,13 @@ import io
 import json
 import logging
 import os
+import plistlib
 import threading
 import zipfile
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from telegram import Update
 
@@ -33,17 +34,19 @@ class BotHTTPServer(ThreadingHTTPServer):
         self.certificate_webhook = None
         self.certificate_cover = None
         self.certificate_logo = None
+        self.certificate_signed_lookup = None
 
     def configure(self, applications: dict, secrets: dict[str, str]) -> None:
         self.applications = applications
         self.secrets = secrets
 
-    def configure_certificates(self, lookup, download, webhook, cover=None, logo=None) -> None:
+    def configure_certificates(self, lookup, download, webhook, cover=None, logo=None, signed_lookup=None) -> None:
         self.certificate_lookup = lookup
         self.certificate_download = download
         self.certificate_webhook = webhook
         self.certificate_cover = cover
         self.certificate_logo = logo
+        self.certificate_signed_lookup = signed_lookup
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -67,6 +70,11 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if path.startswith("/certificate/app/") or path.startswith("/certificate/manifest/"):
+            parts = path.strip("/").split("/")
+            if len(parts) == 4:
+                self._certificate_signed_file(parts[2], parts[3], parts[1] == "manifest")
+                return
         if path.startswith("/certificate/install/"):
             self._certificate_page(path.rsplit("/", 1)[-1])
             return
@@ -150,6 +158,18 @@ class HealthHandler(BaseHTTPRequestHandler):
         registered = html.escape(self._pretty_date(order["completed_at"] or order["created_at"]))
         warranty = html.escape(self._warranty(order))
         plan = html.escape(f"Plan #{order['plan_id']}")
+        install_actions = ""
+        if ready and server.certificate_signed_lookup:
+            for kind, label in (("gbox", "GBox"), ("esign", "ESign")):
+                if server.certificate_signed_lookup(order["id"], kind):
+                    # URLs from Render's configured public host cannot be replaced
+                    # by an untrusted Host header.
+                    public_base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+                    manifest = f"{public_base}/certificate/manifest/{token_safe}/{kind}.plist"
+                    if public_base.startswith("https://"):
+                        install_url = "itms-services://?action=download-manifest&url=" + quote(manifest, safe="")
+                        install_actions += (f'<a class="action install-action" href="{html.escape(install_url, quote=True)}">'
+                                            f'<span>📲</span><div><b>Instalar {label}</b><small>Abre esta página en Safari</small></div><i>↗</i></a>')
 
         actions = (f"""
           <div class="section-title">ARCHIVOS DEL CERTIFICADO</div>
@@ -219,6 +239,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         </div>
         <div class="password"><small>Contraseña del P12</small><code>{password}</code></div>
         {actions}
+        {install_actions}
         <div class="foot">Enlace privado generado por Randy Systems. No compartas este enlace con terceros.</div></section></main>
         <button class="music-pill" id="music-pill" type="button" aria-label="Activar o pausar música"><span class="music-dot"></span><span id="music-label">Música automática</span></button>
         <audio id="bg-music" autoplay loop playsinline preload="auto" src="/certificate/music"></audio>
@@ -277,6 +298,44 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _certificate_signed_file(self, token: str, filename: str, manifest: bool) -> None:
+        kind, ext = (filename.rsplit(".", 1) if "." in filename else ("", ""))
+        if kind not in ("gbox", "esign") or ext != ("plist" if manifest else "ipa"):
+            self.send_error(404, "Aplicación no encontrada")
+            return
+        server: BotHTTPServer = self.server
+        order = server.certificate_lookup(token) if server.certificate_lookup else None
+        if not order or order["status"] != "completed" or not server.certificate_signed_lookup:
+            self.send_error(404, "Enlace privado vencido")
+            return
+        app = server.certificate_signed_lookup(order["id"], kind)
+        if not app:
+            self.send_error(404, "La IPA aún no está firmada")
+            return
+        if manifest:
+            base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+            if not base.startswith("https://"):
+                self.send_error(503, "HTTPS no configurado")
+                return
+            body = plistlib.dumps({"items": [{"assets": [{"kind": "software-package",
+                "url": f"{base}/certificate/app/{token}/{kind}.ipa"}],
+                "metadata": {"bundle-identifier": app["bundle_id"],
+                             "bundle-version": app["version"], "kind": "software",
+                             "title": "GBox" if kind == "gbox" else "ESign"}}]})
+            content_type = "application/xml"
+        else:
+            body = app["ipa"]
+            content_type = "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "private, no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _certificate_file(self, token: str) -> None:
         server: BotHTTPServer = self.server

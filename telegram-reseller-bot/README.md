@@ -73,6 +73,23 @@ python bot.py
 - En **Productos → Editar → 📷 Foto**, puede reemplazar la portada de un producto sin recrearlo. En **Multimedia → 🍎 Portada del certificado**, puede subir la imagen de la oferta de certificados. Se aceptan fotos y archivos JPG/PNG.
 - La imagen Randy Mod incluida con el proyecto aparece automáticamente en productos Randy Mod sin foto propia y en la oferta de certificado hasta que el Admin suba otra.
 - Los nombres guardan el identificador de emojis personalizados para mostrarlos en el catálogo cuando Telegram permite al bot usarlos; el emoji normal de respaldo sigue visible en los demás clientes.
+
+### Instalación privada de GBox y ESign
+
+En el bot privado del administrador, abre **🎨 Multimedia → 📱 IPA para instalar**. Sube
+ESign como documento `.ipa` o `.zip` (hasta 19 MB). Puedes cargar GBox 6.1.2
+directamente de su sitio oficial con el botón correspondiente o subir su IPA.
+Ambas IPA se guardan en la base de datos persistente; reemplazar una elimina las
+firmas previas de esa app. No se suben IPA ni P12 a servidores de terceros.
+
+Cuando un comprador tenga un certificado completo, toca GBox o ESign y luego
+**Preparar instalación**. El bot valida el perfil y el UDID, compila `zsign` desde
+una revisión fijada de su repositorio oficial en el disco persistente y firma
+localmente. Si la firma termina, ofrece la página privada para instalar desde
+Safari; el manifest y la IPA firmada solo responden mientras el token privado
+del pedido está vigente. La disponibilidad en el dispositivo depende también
+del estado del certificado ante Apple y requiere una prueba real con una cuenta
+y un dispositivo autorizados.
 - En **API Zentry**, el Admin elige producto y cantidad; las licencias toman la duración del producto y pasan al inventario automáticamente.
 - En **Control keys**, el Admin puede consultar, resetear HWID, bloquear o desbloquear una licencia.
 - Un usuario nuevo pulsa **Solicitar acceso**.

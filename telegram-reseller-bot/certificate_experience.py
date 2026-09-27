@@ -15,6 +15,7 @@ from telegram.constants import ParseMode
 
 import bot
 import health
+from app_signing import SigningError, sign_ipa
 
 log = bot.log
 APPS = {"gbox": "GBox", "esign": "ESign"}
@@ -25,6 +26,7 @@ APP_SOURCES = {
 
 _busy = set()
 _retry_after = {}
+_signing = set()
 
 
 def _safe(value):
@@ -202,6 +204,48 @@ async def certificate_callback(update, context):
         return
     order = bot.db.renew_certificate_link(order_id, query.from_user.id, bot.settings.certificate_link_ttl_hours)
     base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    if action.startswith("sign_") and action[5:] in APPS:
+        kind = action[5:]
+        key = (order_id, kind)
+        if not base.startswith("https://"):
+            await query.answer("Enlace privado HTTPS no configurado", show_alert=True)
+            return
+        if bot.db.signed_certificate_app(order_id, kind):
+            await query.answer("Ya está preparada")
+            await query.message.reply_text("✅ Ya puedes abrir tu página privada y tocar Instalar.",
+                                           reply_markup=InlineKeyboardMarkup([[
+                                               InlineKeyboardButton("🌐 Abrir en Safari · Instalar", url=f"{base}/certificate/install/{order['install_token']}")]]))
+            return
+        source = bot.db.certificate_ipa(kind)
+        if not source:
+            await query.answer("La IPA todavía no está cargada. Avisa al administrador.", show_alert=True)
+            return
+        if key in _signing:
+            await query.answer("La firma ya está en curso", show_alert=True)
+            return
+        _signing.add(key)
+        await query.answer("Preparando firma privada…")
+        status_message = await query.message.reply_text(f"⏳ Firmando {APPS[kind]} para tu dispositivo. Puede tardar unos minutos.")
+        try:
+            certificate = await asyncio.to_thread(bot.chungchi.download, order["download_url"])
+            signed, bundle_id, version = await asyncio.to_thread(
+                sign_ipa, source["ipa"], certificate, order["p12_password"], order["udid"],
+                bot.settings.database_path.parent / "signing-cache")
+            await asyncio.to_thread(bot.db.set_signed_certificate_app, order_id, kind, signed, bundle_id, version)
+            await status_message.edit_text(
+                f"✅ <b>{APPS[kind]} v{html.escape(version)} lista para instalar</b>\n"
+                "Abre la página privada en Safari y toca <b>Instalar</b>.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🌐 Abrir en Safari · Instalar", url=f"{base}/certificate/install/{order['install_token']}")]]))
+        except SigningError as exc:
+            await status_message.edit_text(f"⚠️ No se pudo preparar {APPS[kind]}: {exc}")
+        except Exception:
+            log.exception("Fallo firmando aplicación %s para pedido %s", kind, order_id)
+            await status_message.edit_text("⚠️ Error temporal al preparar la IPA. Intenta otra vez más tarde.")
+        finally:
+            _signing.discard(key)
+        return
     if action == "choose":
         await query.answer()
         rows = [[InlineKeyboardButton(name, callback_data=f"certapp:{key}:{order_id}")]
@@ -231,7 +275,10 @@ async def certificate_callback(update, context):
     name = APPS[action]
     source_label, source_url = APP_SOURCES[action]
     existing = bot.certificate_file_buttons(order)
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton(source_label, url=source_url)]] +
+    install_button = (InlineKeyboardButton("📲 Instalar desde Safari", url=f"{base}/certificate/install/{order['install_token']}")
+                      if bot.db.signed_certificate_app(order_id, action) else
+                      InlineKeyboardButton(f"⚡ Preparar instalación de {name}", callback_data=f"certapp:sign_{action}:{order_id}"))
+    markup = InlineKeyboardMarkup([[install_button], [InlineKeyboardButton(source_label, url=source_url)]] +
                                   [list(row) for row in existing.inline_keyboard])
     caption = (
         f"📲 <b>{name} · tu certificado</b>\n\n"
@@ -239,7 +286,7 @@ async def certificate_callback(update, context):
         f"2. Abre {name} e importa el certificado y el perfil.\n"
         "3. Escribe la contraseña P12 que recibiste en el mensaje privado.\n"
         "4. Selecciona tu IPA dentro de la app y sigue sus pasos para firmar.\n\n"
-        "Un enlace de instalación directa aparecerá cuando exista una IPA firmada y verificada para tu dispositivo.\n"
+        "Toca Preparar instalación para firmar esta IPA con tu certificado; después abre el enlace en Safari.\n"
         "🔐 Los archivos son personales. Comparte el enlace solo contigo."
     )
     logo = bot.db.certificate_logo(action)

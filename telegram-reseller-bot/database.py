@@ -273,6 +273,24 @@ class Database:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS certificate_ipa_sources (
+                    kind TEXT PRIMARY KEY CHECK(kind IN ('gbox','esign')),
+                    ipa BLOB NOT NULL,
+                    bundle_id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    uploaded_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS signed_certificate_apps (
+                    order_id INTEGER NOT NULL REFERENCES certificate_orders(id),
+                    kind TEXT NOT NULL CHECK(kind IN ('gbox','esign')),
+                    ipa BLOB NOT NULL,
+                    bundle_id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(order_id,kind)
+                );
+
                 CREATE TABLE IF NOT EXISTS daily_announcements (
                     id INTEGER PRIMARY KEY CHECK(id = 1),
                     body TEXT NOT NULL,
@@ -466,6 +484,42 @@ class Database:
             except OSError:
                 pass
         return None
+
+    def set_certificate_ipa(self, kind: str, ipa: bytes, bundle_id: str, version: str) -> None:
+        if kind not in {"gbox", "esign"}:
+            raise ValueError("Aplicación inválida")
+        with self.transaction() as con:
+            con.execute("""INSERT INTO certificate_ipa_sources(kind,ipa,bundle_id,version,uploaded_at)
+                           VALUES(?,?,?,?,?) ON CONFLICT(kind) DO UPDATE SET ipa=excluded.ipa,
+                           bundle_id=excluded.bundle_id,version=excluded.version,
+                           uploaded_at=excluded.uploaded_at""", (kind, ipa, bundle_id, version, utcnow()))
+            # Old signatures are tied to the previous source and must not be reused.
+            con.execute("DELETE FROM signed_certificate_apps WHERE kind=?", (kind,))
+
+    def certificate_ipa(self, kind: str) -> sqlite3.Row | None:
+        if kind not in {"gbox", "esign"}:
+            return None
+        with self.connect() as con:
+            return con.execute("SELECT * FROM certificate_ipa_sources WHERE kind=?", (kind,)).fetchone()
+
+    def signed_certificate_app(self, order_id: int, kind: str) -> sqlite3.Row | None:
+        if kind not in {"gbox", "esign"}:
+            return None
+        with self.connect() as con:
+            return con.execute("SELECT * FROM signed_certificate_apps WHERE order_id=? AND kind=?",
+                               (order_id, kind)).fetchone()
+
+    def set_signed_certificate_app(self, order_id: int, kind: str, ipa: bytes,
+                                   bundle_id: str, version: str) -> None:
+        if kind not in {"gbox", "esign"}:
+            raise ValueError("Aplicación inválida")
+        with self.transaction() as con:
+            con.execute("""INSERT INTO signed_certificate_apps
+                           (order_id,kind,ipa,bundle_id,version,created_at) VALUES(?,?,?,?,?,?)
+                           ON CONFLICT(order_id,kind) DO UPDATE SET ipa=excluded.ipa,
+                           bundle_id=excluded.bundle_id,version=excluded.version,
+                           created_at=excluded.created_at""",
+                        (order_id, kind, ipa, bundle_id, version, utcnow()))
 
     def reseller_ids(self) -> list[int]:
         with self.connect() as con:

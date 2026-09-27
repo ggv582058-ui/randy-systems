@@ -1076,6 +1076,7 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 [InlineKeyboardButton("📦 Foto de producto", callback_data="media:products")],
                 [InlineKeyboardButton("🍎 Portada del certificado", callback_data="certcover:upload")],
                 [InlineKeyboardButton("🖼️ Logos · GBox / ESign / archivos", callback_data="certlogos:menu")],
+                [InlineKeyboardButton("📱 IPA para instalar · GBox / ESign", callback_data="certipa:menu")],
             ]),
         )
     elif admin_panel and user["role"] == "admin" and text in ("⚡ API Zentry", "⚡ Zentry API"):
@@ -1457,6 +1458,32 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         db.set_certificate_logo(kind, data)
         context.user_data.pop("flow", None)
         await message.reply_text(f"✅ Logo de {kind} guardado para el certificado y la web.", reply_markup=ADMIN_MENU)
+        return True
+
+    if flow["name"] == "certificate_ipa_upload":
+        from app_signing import SigningError, ipa_info
+        document = message.document
+        if not document or not document.file_name.lower().endswith((".ipa", ".zip")):
+            await message.reply_text("❌ Envía la IPA de la app como documento .ipa o .zip.")
+            return True
+        if document.file_size and document.file_size > 19 * 1024 * 1024:
+            await message.reply_text("❌ Para subirla por Telegram, la IPA debe pesar menos de 19 MB.")
+            return True
+        tg_file = await context.bot.get_file(document.file_id)
+        payload = bytes(await tg_file.download_as_bytearray())
+        try:
+            bundle_id, version = ipa_info(payload)
+        except SigningError as exc:
+            await message.reply_text(f"❌ {exc}")
+            return True
+        kind = flow["kind"]
+        db.set_certificate_ipa(kind, payload, bundle_id, version)
+        context.user_data.pop("flow", None)
+        await message.reply_text(
+            f"✅ IPA {kind.upper()} v{version} guardada. ID: {bundle_id}.\n"
+            "Cada cliente con certificado listo podrá preparar su instalación privada.",
+            reply_markup=ADMIN_MENU,
+        )
         return True
 
     if flow["name"] == "product_sticker":
@@ -1991,6 +2018,48 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 return
             context.user_data["flow"] = {"name": "certificate_logo_photo", "kind": kind}
             await query.message.reply_text(f"📷 Envía el logo para {kind} como foto o JPG/PNG (máximo 2 MB).")
+        return
+
+    if data in ("certipa:menu", "certipa:fetch:gbox") or data.startswith("certipa:set:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        await query.answer()
+        if data == "certipa:menu":
+            await query.message.reply_text(
+                "📱 <b>IPAS PARA FIRMAR</b>\nSube una IPA original de cada app. "
+                "El bot la firmará con el certificado del cliente cuando él la solicite.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🟩 Subir GBox", callback_data="certipa:set:gbox"),
+                    InlineKeyboardButton("🔷 Subir ESign", callback_data="certipa:set:esign"),
+                ], [InlineKeyboardButton("⬇️ Cargar GBox 6.1.2 oficial", callback_data="certipa:fetch:gbox")]]),
+            )
+        elif data == "certipa:fetch:gbox":
+            from app_signing import SigningError, ipa_info
+            import urllib.request
+            status = await query.message.reply_text("⏳ Descargando la IPA original de GBox…")
+            try:
+                def download_gbox():
+                    request = urllib.request.Request(
+                        "https://cdn.gbox.run/d/apps/GBox_v6.1.2.ipa",
+                        headers={"User-Agent": "RandyCertificates/1.0"})
+                    with urllib.request.urlopen(request, timeout=35) as response:
+                        payload = response.read(19 * 1024 * 1024 + 1)
+                    bundle_id, version = ipa_info(payload)
+                    db.set_certificate_ipa("gbox", payload, bundle_id, version)
+                    return bundle_id, version
+                bundle_id, version = await asyncio.to_thread(download_gbox)
+                await status.edit_text(f"✅ GBox v{version} cargada. ID: {bundle_id}.")
+            except (OSError, ValueError, SigningError) as exc:
+                log.warning("Descarga GBox falló: %s", exc)
+                await status.edit_text("⚠️ No pude descargar GBox desde su servidor. Puedes subir su IPA como documento.")
+        else:
+            kind = data.rsplit(":", 1)[-1]
+            if kind not in ("gbox", "esign"):
+                return
+            context.user_data["flow"] = {"name": "certificate_ipa_upload", "kind": kind}
+            await query.message.reply_text(f"📎 Envía {kind.upper()} como archivo .ipa o .zip (máximo 19 MB).")
         return
 
     if data.startswith("product:photo:"):
@@ -2594,7 +2663,8 @@ async def run_bots() -> None:
             return True
 
         server.configure_certificates(certificate_lookup, certificate_download, certificate_webhook,
-                                      db.certificate_offer_photo, db.certificate_logo)
+                                      db.certificate_offer_photo, db.certificate_logo,
+                                      db.signed_certificate_app)
         poll_task = asyncio.create_task(certificate_poll_loop(reseller_app.bot, stop_event))
         announcement_task = asyncio.create_task(daily_announcement_loop(reseller_app.bot, stop_event))
         log.info("Bots iniciados por webhook: revendedores + admin (%s)", settings.store_name)
