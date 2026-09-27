@@ -8,6 +8,15 @@ from database import Database, InsufficientBalance, OutOfStock, ProductRestricte
 
 
 class DatabaseTests(unittest.TestCase):
+    def test_certificate_logos_persist_across_restart(self):
+        self.db.set_certificate_logo("gbox", b"\xff\xd8\xffexample")
+        self.assertIsNone(self.db.certificate_logo("esign"))
+        restarted = Database(self.db.path)
+        restarted.initialize()
+        self.assertEqual(restarted.certificate_logo("gbox"), b"\xff\xd8\xffexample")
+        with self.assertRaises(ValueError):
+            self.db.set_certificate_logo("other", b"test")
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Database(Path(self.tmp.name) / "test.db")

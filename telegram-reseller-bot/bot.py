@@ -1075,6 +1075,7 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📦 Foto de producto", callback_data="media:products")],
                 [InlineKeyboardButton("🍎 Portada del certificado", callback_data="certcover:upload")],
+                [InlineKeyboardButton("🖼️ Logos · GBox / ESign / archivos", callback_data="certlogos:menu")],
             ]),
         )
     elif admin_panel and user["role"] == "admin" and text in ("⚡ API Zentry", "⚡ Zentry API"):
@@ -1437,6 +1438,25 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         db.set_certificate_offer_photo(bytes(await tg_file.download_as_bytearray()))
         context.user_data.pop("flow", None)
         await message.reply_text("✅ Foto del certificado guardada. Aparecerá en 🍎 Certificado iOS y en la página privada de entrega.", reply_markup=ADMIN_MENU)
+        return True
+
+    if flow["name"] == "certificate_logo_photo":
+        if not message.photo and not (message.document and message.document.mime_type in ("image/jpeg", "image/png")):
+            await message.reply_text("❌ Envía una foto o un archivo JPG/PNG.")
+            return True
+        photo_info = message.photo[-1] if message.photo else message.document
+        if photo_info.file_size and photo_info.file_size > 2 * 1024 * 1024:
+            await message.reply_text("❌ El logo no puede superar 2 MB.")
+            return True
+        tg_file = await context.bot.get_file(photo_info.file_id)
+        data = bytes(await tg_file.download_as_bytearray())
+        if not (data.startswith(b"\xff\xd8\xff") or data.startswith(b"\x89PNG\r\n\x1a\n")):
+            await message.reply_text("❌ Envía una imagen JPG o PNG válida.")
+            return True
+        kind = flow["kind"]
+        db.set_certificate_logo(kind, data)
+        context.user_data.pop("flow", None)
+        await message.reply_text(f"✅ Logo de {kind} guardado para el certificado y la web.", reply_markup=ADMIN_MENU)
         return True
 
     if flow["name"] == "product_sticker":
@@ -1948,6 +1968,29 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             context.user_data["flow"] = {"name": "certificate_cover_photo"}
             await query.message.reply_text("🍎 Envía la portada del certificado como foto o archivo JPG/PNG.")
+        return
+
+    if data == "certlogos:menu" or data.startswith("certlogos:set:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        await query.answer()
+        if data == "certlogos:menu":
+            await query.message.reply_text(
+                "🖼️ <b>RANDY SYSTEMS · LOGOS</b>\nElige el logo que quieres subir o reemplazar:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🟩 GBox", callback_data="certlogos:set:gbox"),
+                     InlineKeyboardButton("🔷 ESign", callback_data="certlogos:set:esign")],
+                    [InlineKeyboardButton("🔐 Archivo P12", callback_data="certlogos:set:p12"),
+                     InlineKeyboardButton("📄 MobileProvision", callback_data="certlogos:set:mobileprovision")],
+                ]))
+        else:
+            kind = data.rsplit(":", 1)[-1]
+            if kind not in ("gbox", "esign", "p12", "mobileprovision"):
+                return
+            context.user_data["flow"] = {"name": "certificate_logo_photo", "kind": kind}
+            await query.message.reply_text(f"📷 Envía el logo para {kind} como foto o JPG/PNG (máximo 2 MB).")
         return
 
     if data.startswith("product:photo:"):
@@ -2551,7 +2594,7 @@ async def run_bots() -> None:
             return True
 
         server.configure_certificates(certificate_lookup, certificate_download, certificate_webhook,
-                                      db.certificate_offer_photo)
+                                      db.certificate_offer_photo, db.certificate_logo)
         poll_task = asyncio.create_task(certificate_poll_loop(reseller_app.bot, stop_event))
         announcement_task = asyncio.create_task(daily_announcement_loop(reseller_app.bot, stop_event))
         log.info("Bots iniciados por webhook: revendedores + admin (%s)", settings.store_name)

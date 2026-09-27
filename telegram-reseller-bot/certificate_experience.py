@@ -8,6 +8,7 @@ import os
 import re
 import time
 import zipfile
+from PIL import Image, ImageOps
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -16,7 +17,7 @@ import bot
 import health
 
 log = bot.log
-APPS = {"gbox": "GBox", "feather": "Feather", "esign": "ESign", "ksign": "KSign", "scarlet": "Scarlet"}
+APPS = {"gbox": "GBox", "esign": "ESign"}
 
 _busy = set()
 _retry_after = {}
@@ -51,10 +52,7 @@ def delivery_menu(order):
     order_id = int(order["id"])
     rows = [[InlineKeyboardButton("📥 Obtener certificado", callback_data=f"certapp:files:{order_id}")],
             [InlineKeyboardButton("🟩 GBox", callback_data=f"certapp:gbox:{order_id}"),
-             InlineKeyboardButton("🪶 Feather", callback_data=f"certapp:feather:{order_id}")],
-            [InlineKeyboardButton("🔷 ESign", callback_data=f"certapp:esign:{order_id}"),
-             InlineKeyboardButton("🔹 KSign", callback_data=f"certapp:ksign:{order_id}")],
-            [InlineKeyboardButton("🔻 Scarlet", callback_data=f"certapp:scarlet:{order_id}")]]
+             InlineKeyboardButton("🔷 ESign", callback_data=f"certapp:esign:{order_id}")]]
     base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
     if base.startswith("https://"):
         rows.append([InlineKeyboardButton("🌐 Abrir mi página privada", url=f"{base}/certificate/install/{order['install_token']}")])
@@ -72,14 +70,28 @@ async def send_files(tg_bot, order):
         caption="📦 <b>Tu certificado · ZIP completo</b>\nGuarda estos archivos solo en tu dispositivo.",
         parse_mode=ParseMode.HTML)
     p12, mobile = _components(data)
-    for component, caption in ((p12, "🔐 Certificado P12"), (mobile, "📲 MobileProvision")):
+    for kind, component, caption in (("p12", p12, "🔐 Certificado P12"),
+                                     ("mobileprovision", mobile, "📲 MobileProvision")):
         if component:
             stream = io.BytesIO(component[1])
             stream.name = component[0]
-            await tg_bot.send_document(order["user_id"], stream, caption=caption)
+            logo = bot.db.certificate_logo(kind)
+            thumbnail = None
+            if logo:
+                try:
+                    with Image.open(io.BytesIO(logo)) as image:
+                        preview = ImageOps.fit(image.convert("RGB"), (256, 256))
+                        thumb = io.BytesIO()
+                        preview.save(thumb, format="JPEG", quality=82)
+                        thumb.seek(0)
+                        thumb.name = "logo.jpg"
+                        thumbnail = thumb
+                except Exception:
+                    log.warning("Logo inválido para %s", kind)
+            await tg_bot.send_document(order["user_id"], stream, caption=caption, thumbnail=thumbnail)
     await tg_bot.send_message(order["user_id"],
         f"🔑 Contraseña P12: <code>{html.escape(str(order['p12_password']))}</code>\n"
-        "Usa los botones para elegir la app donde importarás estos archivos.",
+        "Elige GBox o ESign para ver cómo usar tus archivos.",
         parse_mode=ParseMode.HTML, reply_markup=delivery_menu(order))
 
 
@@ -95,7 +107,7 @@ async def deliver(tg_bot, order):
             "✅ <b>CERTIFICADO LISTO</b>\n━━━━━━━━━━━━━━━━━━\n"
             f"📱 Dispositivo: <b>{html.escape(str(order['device']))}</b>\n"
             f"🆔 UDID: <code>{html.escape(str(order['udid']))}</code>\n\n"
-            "Elige tu app o toca <b>Obtener certificado</b> para recibir ZIP, P12 y MobileProvision aquí mismo. "
+            "Toca <b>Obtener certificado</b> para recibir P12 y MobileProvision aquí mismo. "
             "También puedes abrir tu página privada.",
             parse_mode=ParseMode.HTML, reply_markup=delivery_menu(order))
         bot.db.mark_certificate_delivered(order_id)
@@ -128,7 +140,7 @@ def page(self, token):
         <button class="secret" id="copy-password" type="button"><span>🔑 Contraseña P12</span><span id="secret-label">Tocar para copiar · ••••••••</span></button>
         </section><section class="glass" id="apps"><div class="section-kicker">03 / TU APP</div><h2>Elige cómo firmar</h2>
         <p>Importa los archivos en tu app de firma. Elige una para ver los pasos.</p>
-        <div class="app-grid"><button class="app selected" data-app="GBox"><span>▣</span>GBox</button><button class="app" data-app="Feather"><span>✦</span>Feather</button><button class="app" data-app="ESign"><span>✍</span>ESign</button><button class="app" data-app="KSign"><span>◈</span>KSign</button><button class="app" data-app="Scarlet"><span>✧</span>Scarlet</button></div>
+        <div class="app-grid"><button class="app selected" data-app="GBox"><span>▣</span>GBox</button><button class="app" data-app="ESign"><span>✍</span>ESign</button></div>
         <div class="guide"><div class="guide-title">PASOS PARA <b id="selected-app">GBox</b></div>
         <div class="step"><em>01</em><span>Descarga el P12 y el MobileProvision de esta página.</span></div>
         <div class="step"><em>02</em><span>Abre <b class="app-name">GBox</b> y busca la opción de importar certificados.</span></div>
@@ -197,7 +209,7 @@ async def certificate_callback(update, context):
             "Te mostraré los archivos y pasos para importarlo en esa app.",
             parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
         return
-    if action == "files" or action in APPS:
+    if action == "files":
         await query.answer("Preparando tus archivos…")
         try:
             await send_files(context.bot, order)
@@ -208,8 +220,7 @@ async def certificate_callback(update, context):
                 "⚠️ No pude enviarte los archivos por Telegram. Abre tu enlace privado y toca Descargar ZIP; "
                 "si estás en el navegador integrado, usa Compartir → Abrir en Safari.", reply_markup=markup)
             return
-        if action == "files":
-            return
+        return
     if action not in APPS:
         await query.answer("Opción inválida", show_alert=True)
         return
@@ -217,10 +228,11 @@ async def certificate_callback(update, context):
     markup = bot.certificate_file_buttons(order)
     await query.message.reply_text(
         f"📲 <b>{name} · tu certificado</b>\n\n"
-        "1. Guarda el P12 y MobileProvision que acabo de enviarte.\n"
+        "1. Toca Obtener certificado y guarda tu P12 y MobileProvision.\n"
         f"2. Abre {name} e importa el certificado y el perfil.\n"
         "3. Escribe la contraseña P12 que recibiste en el mensaje privado.\n"
         "4. Selecciona tu IPA dentro de la app y sigue sus pasos para firmar.\n\n"
+        "Un enlace de instalación directa aparecerá cuando exista una IPA firmada y verificada para tu dispositivo.\n"
         "🔐 Los archivos son personales. Comparte el enlace solo contigo.",
         parse_mode=ParseMode.HTML, reply_markup=markup)
 

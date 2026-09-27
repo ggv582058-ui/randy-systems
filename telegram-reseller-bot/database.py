@@ -267,6 +267,12 @@ class Database:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS certificate_logos (
+                    kind TEXT PRIMARY KEY CHECK(kind IN ('gbox','esign','p12','mobileprovision')),
+                    data BLOB NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS daily_announcements (
                     id INTEGER PRIMARY KEY CHECK(id = 1),
                     body TEXT NOT NULL,
@@ -436,6 +442,21 @@ class Database:
         with self.connect() as con:
             row = con.execute("SELECT photo_data FROM certificate_offer_media WHERE id=1").fetchone()
             return row["photo_data"] if row else None
+
+    def set_certificate_logo(self, kind: str, data: bytes) -> None:
+        if kind not in {"gbox", "esign", "p12", "mobileprovision"}:
+            raise ValueError("Logo inválido")
+        with self.transaction() as con:
+            con.execute("""INSERT INTO certificate_logos(kind,data,updated_at) VALUES(?,?,?)
+                           ON CONFLICT(kind) DO UPDATE SET data=excluded.data,
+                           updated_at=excluded.updated_at""", (kind, data, utcnow()))
+
+    def certificate_logo(self, kind: str) -> bytes | None:
+        if kind not in {"gbox", "esign", "p12", "mobileprovision"}:
+            return None
+        with self.connect() as con:
+            row = con.execute("SELECT data FROM certificate_logos WHERE kind=?", (kind,)).fetchone()
+            return row["data"] if row else None
 
     def reseller_ids(self) -> list[int]:
         with self.connect() as con:

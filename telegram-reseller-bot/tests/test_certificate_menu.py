@@ -8,9 +8,20 @@ os.environ.setdefault("ADMIN_BOT_TOKEN", "456:TEST_TOKEN")
 os.environ.setdefault("ADMIN_IDS", "1")
 
 import bot
+import certificate_experience
 
 
 class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
+    def test_certificate_menu_only_offers_gbox_and_esign(self):
+        order = {"id": 7, "install_token": "private"}
+        buttons = certificate_experience.delivery_menu(order).inline_keyboard
+        names = " ".join(button.text for row in buttons for button in row)
+        self.assertIn("GBox", names)
+        self.assertIn("ESign", names)
+        self.assertNotIn("Feather", names)
+        self.assertNotIn("Scarlet", names)
+        self.assertNotIn("KSign", names)
+
     async def test_catalog_waits_for_product_selection_before_sending_a_photo(self):
         message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
         update = SimpleNamespace(effective_user=SimpleNamespace(id=2), effective_message=message)
