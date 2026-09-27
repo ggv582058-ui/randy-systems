@@ -409,8 +409,6 @@ class HealthHandler(BaseHTTPRequestHandler):
             secret = os.getenv("IPA_IMPORT_SECRET", "")
             supplied = self.headers.get("X-IPA-Import-Secret", "")
             if not secret or len(secret) < 48 or not hmac.compare_digest(secret, supplied):
-                log.warning("Carga IPA no autorizada: secret_configured=%s header_present=%s",
-                            len(secret) >= 48, bool(supplied))
                 self.send_error(404)
                 return
             if not server.certificate_ipa_save:

@@ -1089,6 +1089,7 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 [InlineKeyboardButton("📦 Foto de producto", callback_data="media:products")],
                 [InlineKeyboardButton("🍎 Portada del certificado", callback_data="certcover:upload")],
                 [InlineKeyboardButton("🖼️ Logos · GBox / ESign / archivos", callback_data="certlogos:menu")],
+                [InlineKeyboardButton("ID de emoji Premium", callback_data="certemoji:get")],
                 [InlineKeyboardButton("📱 IPA para instalar · GBox / ESign", callback_data="certipa:menu")],
             ]),
         )
@@ -1471,6 +1472,16 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         db.set_certificate_logo(kind, data)
         context.user_data.pop("flow", None)
         await message.reply_text(f"✅ Logo de {kind} guardado para el certificado y la web.", reply_markup=ADMIN_MENU)
+        return True
+
+    if flow["name"] == "certificate_emoji_id":
+        emoji_id = custom_emoji_id(message)
+        if not emoji_id:
+            await message.reply_text("Envía un emoji animado de tu paquete Premium como mensaje, no un sticker ni el enlace del paquete.")
+            return True
+        context.user_data.pop("flow", None)
+        await message.reply_text(f"ID del emoji: <code>{html.escape(emoji_id)}</code>\nCópialo y envíamelo aquí para ponerlo en los botones.",
+                                 parse_mode=ParseMode.HTML, reply_markup=ADMIN_MENU)
         return True
 
     if flow["name"] == "certificate_ipa_upload":
@@ -2031,6 +2042,15 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 return
             context.user_data["flow"] = {"name": "certificate_logo_photo", "kind": kind}
             await query.message.reply_text(f"📷 Envía el logo para {kind} como foto o JPG/PNG (máximo 2 MB).")
+        return
+
+    if data == "certemoji:get":
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        context.user_data["flow"] = {"name": "certificate_emoji_id"}
+        await query.answer()
+        await query.message.reply_text("Abre tu paquete de emojis Premium y envía aquí el emoji que quieres usar en el botón. Te daré su ID para copiarlo.")
         return
 
     if data in ("certipa:menu", "certipa:fetch:gbox") or data.startswith("certipa:set:"):

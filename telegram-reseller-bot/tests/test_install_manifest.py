@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 
 from health import BotHTTPServer, HealthHandler
 import certificate_experience  # noqa: F401 - activates the bot's production delivery flow
+import certificate_reliability  # noqa: F401 - installs the production webhook wrapper
 
 
 class InstallManifestTests(unittest.TestCase):
