@@ -96,6 +96,12 @@ Safari; el manifest y la IPA firmada solo responden mientras el token privado
 del pedido está vigente. La disponibilidad en el dispositivo depende también
 del estado del certificado ante Apple y requiere una prueba real con una cuenta
 y un dispositivo autorizados.
+El botón **Usar P12 y perfil en GBox** reenvía ambos archivos por Telegram para
+compartirlos con GBox o importarlos desde Archivos. Cuando la firma está lista,
+**Instalar GBox · Safari** abre el enlace privado directamente en la sección
+de instalación, con el logo y la acción principal antes de los demás datos.
+Telegram acepta URL HTTP y tg:// en botones, de modo que el enlace OTA de iOS
+se toca dentro de Safari.
 - En **API Zentry**, el Admin elige producto y cantidad; las licencias toman la duración del producto y pasan al inventario automáticamente.
 - En **Control keys**, el Admin puede consultar, resetear HWID, bloquear o desbloquear una licencia.
 - Un usuario nuevo pulsa **Solicitar acceso**.

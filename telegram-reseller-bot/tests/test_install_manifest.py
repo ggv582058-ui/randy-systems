@@ -50,10 +50,12 @@ class InstallManifestTests(unittest.TestCase):
             "plan_id": "one"
         } if token == "private" else None
         with patch.dict(os.environ, {"RENDER_EXTERNAL_URL": "https://example.test"}):
-            with urlopen(self.base + "/certificate/install/private") as response:
+            with urlopen(self.base + "/certificate/install/private?app=esign") as response:
                 page = response.read().decode()
         self.assertIn("Instalar ESign", page)
         self.assertIn("itms-services://", page)
+        self.assertLess(page.index("Instalar ESign"), page.index("ARCHIVOS DEL CERTIFICADO"))
+        self.assertIn('/certificate/logo/private/esign', page)
 
 
 if __name__ == "__main__":

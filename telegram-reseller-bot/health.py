@@ -13,7 +13,7 @@ import zipfile
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 from telegram import Update
 
@@ -76,7 +76,8 @@ class HealthHandler(BaseHTTPRequestHandler):
                 self._certificate_signed_file(parts[2], parts[3], parts[1] == "manifest")
                 return
         if path.startswith("/certificate/install/"):
-            self._certificate_page(path.rsplit("/", 1)[-1])
+            focus = parse_qs(urlsplit(self.path).query).get("app", [""])[0]
+            self._certificate_page(path.rsplit("/", 1)[-1], focus if focus in ("gbox", "esign") else "")
             return
         if path.startswith("/certificate/cover/"):
             self._certificate_cover(path.rsplit("/", 1)[-1])
@@ -133,7 +134,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         except Exception:
             return "30 días"
 
-    def _certificate_page(self, token: str) -> None:
+    def _certificate_page(self, token: str, focus: str = "") -> None:
         server: BotHTTPServer = self.server
         order = server.certificate_lookup(token) if server.certificate_lookup else None
         if not order:
@@ -160,7 +161,8 @@ class HealthHandler(BaseHTTPRequestHandler):
         plan = html.escape(f"Plan #{order['plan_id']}")
         install_actions = ""
         if ready and server.certificate_signed_lookup:
-            for kind, label in (("gbox", "GBox"), ("esign", "ESign")):
+            for kind, label in sorted((("gbox", "GBox"), ("esign", "ESign")),
+                                      key=lambda item: item[0] != focus):
                 if server.certificate_signed_lookup(order["id"], kind):
                     # URLs from Render's configured public host cannot be replaced
                     # by an untrusted Host header.
@@ -168,8 +170,10 @@ class HealthHandler(BaseHTTPRequestHandler):
                     manifest = f"{public_base}/certificate/manifest/{token_safe}/{kind}.plist"
                     if public_base.startswith("https://"):
                         install_url = "itms-services://?action=download-manifest&url=" + quote(manifest, safe="")
+                        icon = f'/certificate/logo/{token_safe}/{kind}'
                         install_actions += (f'<a class="action install-action" href="{html.escape(install_url, quote=True)}">'
-                                            f'<span>📲</span><div><b>Instalar {label}</b><small>Abre esta página en Safari</small></div><i>↗</i></a>')
+                                            f'<span><img class="app-logo" src="{icon}" alt=""></span>'
+                                            f'<div><b>Instalar {label}</b><small>Toca aquí desde Safari</small></div><i>↗</i></a>')
 
         actions = (f"""
           <div class="section-title">ARCHIVOS DEL CERTIFICADO</div>
@@ -222,13 +226,15 @@ class HealthHandler(BaseHTTPRequestHandler):
         .grid{{display:grid;gap:10px;margin:15px 0 4px}}.info{{display:grid;grid-template-columns:42px 1fr;align-items:center;gap:10px;padding:13px 14px;border-radius:18px;background:#07162bb0;border:1px solid #82bbff20;box-shadow:inset 0 1px 0 #fff08}}.icon{{width:38px;height:38px;border-radius:13px;display:grid;place-items:center;background:linear-gradient(145deg,#0a54ad,#0b2046);border:1px solid #5cb2ff55;box-shadow:0 8px 20px #006dff25}}.info small{{display:block;color:#7ea1c9;font-size:11px;text-transform:uppercase;letter-spacing:1.3px;font-weight:700;margin-bottom:2px}}.info b{{font-size:15px;overflow-wrap:anywhere}}
         .password{{margin-top:13px;padding:14px 16px;border-radius:17px;background:#020916b8;border:1px solid #8dc8ff26}}.password small{{display:block;color:#83a8d3;font-size:11px;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:5px}}code{{font-size:16px;color:#d8ecff;overflow-wrap:anywhere}}
         .section-title{{margin:23px 2px 10px;color:#7197c4;font-size:10px;font-weight:900;letter-spacing:1.8px}}button,.action{{font-family:inherit}}.action{{appearance:none;position:relative;display:grid;grid-template-columns:44px 1fr 26px;align-items:center;gap:10px;width:100%;margin-top:9px;border:1px solid #67b7ff33;border-radius:19px;padding:12px 14px;background:linear-gradient(145deg,#0d2b51b8,#07172eb8);color:#fff;text-align:left;text-decoration:none;box-shadow:inset 0 1px 0 #fff10;backdrop-filter:blur(12px)}}.action>span{{width:42px;height:42px;display:grid;place-items:center;border-radius:14px;background:#1687ff1f;border:1px solid #5aaeff35;font-size:20px}}.action b{{display:block;font-size:15px}}.action small{{display:block;color:#84a8d0;margin-top:3px;font-size:11px}}.action i{{font-style:normal;color:#78bfff;font-size:22px;text-align:center}}.action:active{{transform:scale(.985)}}.copied{{border-color:#66ffc4aa!important;background:#0e513e88!important}}
-        .apps{{display:grid;grid-template-columns:repeat(2,1fr);gap:9px}}.mini{{border:1px solid #72b9ff31;border-radius:18px;padding:14px 11px;background:#0a1b35b8;color:white;font-size:18px;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:inset 0 1px 0 #fff0d}}.mini b{{font-size:13px}}.app-logo,.file-logo{{width:28px;height:28px;object-fit:cover;border-radius:8px;flex:none}}.source-links{{display:flex;flex-wrap:wrap;gap:10px;margin:13px 2px 0}}.source-links a{{color:#8dcaff;font-size:12px;text-decoration:none;font-weight:750}}.source-links a:hover{{text-decoration:underline}}
+        .apps{{display:grid;grid-template-columns:repeat(2,1fr);gap:9px}}.mini{{border:1px solid #72b9ff31;border-radius:18px;padding:14px 11px;background:#0a1b35b8;color:white;font-size:18px;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:inset 0 1px 0 #fff0d}}.mini b{{font-size:13px}}.app-logo,.file-logo{{width:28px;height:28px;object-fit:cover;border-radius:8px;flex:none}}.install-action{{padding:18px 14px;border-color:#73e1ffa0;background:linear-gradient(110deg,#1260cb,#197bd8);box-shadow:0 12px 32px #1267db55}}.install-action b{{font-size:18px}}.install-action .app-logo{{width:35px;height:35px}}.source-links{{display:flex;flex-wrap:wrap;gap:10px;margin:13px 2px 0}}.source-links a{{color:#8dcaff;font-size:12px;text-decoration:none;font-weight:750}}.source-links a:hover{{text-decoration:underline}}
         .waiting{{margin-top:20px;display:flex;align-items:center;gap:14px;padding:18px;border-radius:20px;background:#0b213fbb;border:1px solid #4ca7ff3d}}.waiting small{{display:block;color:#8db1d9;margin-top:4px}}.loader{{width:28px;height:28px;border-radius:50%;border:3px solid #1687ff33;border-top-color:#56b3ff;animation:spin .8s linear infinite}}@keyframes spin{{to{{transform:rotate(360deg)}}}}
         .music-pill{{position:fixed;z-index:8;right:15px;bottom:calc(16px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:8px;padding:10px 13px;border:1px solid #8dccff4a;border-radius:999px;background:#071a31c7;color:#cfeaff;backdrop-filter:blur(18px);box-shadow:0 12px 30px #0008;font-size:12px;font-weight:800}}.music-dot{{width:8px;height:8px;border-radius:50%;background:#36a3ff;box-shadow:0 0 12px #36a3ff;animation:pulse 1.2s ease-in-out infinite alternate}}@keyframes pulse{{to{{opacity:.3;transform:scale(.65)}}}}
         .foot{{margin:18px 5px 0;color:#6388b2;font-size:11px;line-height:1.5;text-align:center}}@media(min-width:500px){{.grid{{grid-template-columns:1fr 1fr}}}}
         </style></head>
         <body><main><section class="glass"><div class="brand">RANDY SYSTEMS · ENTREGA PRIVADA</div>
         <div class="hero" style="background-image:linear-gradient(0deg,#031025ed,#06152a55),url('/certificate/cover/{token_safe}');background-position:center;background-size:cover;min-height:220px;display:flex;flex-direction:column;justify-content:flex-end"><div class="eyebrow">CERTIFICADO DIGITAL</div><h1>{name}</h1><div class="signed">✓ {status}</div></div>
+        <div class="section-title">INSTALACIÓN EN SAFARI</div>
+        {install_actions if install_actions else '<div class="waiting"><div>📲</div><div><b>Prepara GBox o ESign desde tu bot</b><small>En Telegram toca Preparar instalación. Regresa aquí cuando esté lista la app firmada.</small></div></div>' if ready else ''}
         <div class="grid">
           <div class="info"><div class="icon">🆔</div><div><small>UDID</small><b>{udid}</b></div></div>
           <div class="info"><div class="icon">📱</div><div><small>Dispositivo</small><b>{device}</b></div></div>
@@ -239,8 +245,6 @@ class HealthHandler(BaseHTTPRequestHandler):
         </div>
         <div class="password"><small>Contraseña del P12</small><code>{password}</code></div>
         {actions}
-        <div class="section-title">INSTALACIÓN EN SAFARI</div>
-        {install_actions if install_actions else '<div class="waiting"><div>📲</div><div><b>Prepara GBox o ESign desde tu bot</b><small>En Telegram toca GBox o ESign → Preparar instalación. Regresa aquí para instalar la app firmada.</small></div></div>' if ready else ''}
         <div class="foot">Enlace privado generado por Randy Systems. No compartas este enlace con terceros.</div></section></main>
         <button class="music-pill" id="music-pill" type="button" aria-label="Activar o pausar música"><span class="music-dot"></span><span id="music-label">Música automática</span></button>
         <audio id="bg-music" autoplay loop playsinline preload="auto" src="/certificate/music"></audio>

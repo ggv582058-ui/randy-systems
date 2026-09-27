@@ -28,6 +28,10 @@ def _safe(value):
     return re.sub(r"[^A-Za-z0-9._ -]+", "_", value or "certificate").strip(" ._")[:80] or "certificate"
 
 
+def install_page(base: str, order, kind: str) -> str:
+    return f"{base}/certificate/install/{order['install_token']}?app={kind}"
+
+
 def _components(data):
     p12 = mobile = None
     try:
@@ -100,10 +104,10 @@ async def send_app_choice(tg_bot, order, kind="gbox"):
     order_id = int(order["id"])
     base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
     signed = bot.db.signed_certificate_app(order_id, kind)
-    install = (InlineKeyboardButton("Instalar desde Safari", url=f"{base}/certificate/install/{order['install_token']}")
+    install = (InlineKeyboardButton(f"Instalar {name} · Safari", url=install_page(base, order, kind))
                if signed and base.startswith("https://") else
                InlineKeyboardButton(f"Preparar {name} para instalar", callback_data=f"certapp:sign_{kind}:{order_id}"))
-    rows = [[install], [InlineKeyboardButton("Reenviar P12 y MobileProvision", callback_data=f"certapp:files:{order_id}")]]
+    rows = [[install], [InlineKeyboardButton(f"Usar P12 y perfil en {name}", callback_data=f"certapp:import_{kind}:{order_id}")]]
     if kind == "gbox":
         rows.append([InlineKeyboardButton("Otras opciones · ESign", callback_data=f"certapp:esign:{order_id}")])
     if base.startswith("https://"):
@@ -162,9 +166,9 @@ async def certificate_callback(update, context):
             return
         if bot.db.signed_certificate_app(order_id, kind):
             await query.answer("Ya está preparada")
-            await query.message.reply_text("✅ Ya puedes abrir tu página privada y tocar Instalar.",
+            await query.message.reply_text(f"✅ {APPS[kind]} está lista. Abre en Safari y toca Instalar.",
                                            reply_markup=InlineKeyboardMarkup([[
-                                               InlineKeyboardButton("🌐 Abrir en Safari · Instalar", url=f"{base}/certificate/install/{order['install_token']}")]]))
+                                               InlineKeyboardButton(f"Instalar {APPS[kind]} · Safari", url=install_page(base, order, kind))]]))
             return
         if key in _signing:
             await query.answer("La firma ya está en curso", show_alert=True)
@@ -198,12 +202,12 @@ async def certificate_callback(update, context):
                 "Abre la página privada en Safari y toca <b>Instalar</b>.",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🌐 Abrir en Safari · Instalar", url=f"{base}/certificate/install/{order['install_token']}")]]))
+                    InlineKeyboardButton(f"Instalar {APPS[kind]} · Safari", url=install_page(base, order, kind))]]))
             try:
                 current_rows = query.message.reply_markup.inline_keyboard
                 await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(
                     [[InlineKeyboardButton(f"Instalar {APPS[kind]} desde Safari",
-                                           url=f"{base}/certificate/install/{order['install_token']}")]] +
+                                           url=install_page(base, order, kind))]] +
                     [list(row) for row in current_rows[1:]]))
             except Exception:
                 log.info("No se pudo actualizar el botón de instalación del pedido %s", order_id)
@@ -236,6 +240,19 @@ async def certificate_callback(update, context):
             log.warning("No se pudo reenviar la entrega completa del pedido %s: %s", order_id, exc)
             await query.message.reply_text("No pude reenviar los archivos. Abre tu página privada para descargarlos.",
                                            reply_markup=delivery_menu(order))
+        return
+    if action in ("import_gbox", "import_esign"):
+        kind = action.split("_", 1)[1]
+        await query.answer("Enviando P12 y perfil…")
+        try:
+            await send_files(context.bot, order)
+            await context.bot.send_message(order["user_id"],
+                f"Abre los archivos P12 y MobileProvision desde Telegram y compártelos con {APPS[kind]} "
+                "si aparece en Compartir. También puedes guardarlos en Archivos e importarlos desde la app. "
+                "Usa la contraseña P12 que acabo de enviarte.")
+        except Exception as exc:
+            log.warning("No se pudieron reenviar archivos para %s en pedido %s: %s", kind, order_id, exc)
+            await query.message.reply_text("No pude reenviar los archivos. Prueba de nuevo o abre tu página privada.")
         return
     if action == "files":
         await query.answer("Preparando tus archivos…")

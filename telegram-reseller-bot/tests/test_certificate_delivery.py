@@ -43,6 +43,7 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("secret", events[2][1][1])
         buttons = events[3][2]["reply_markup"].inline_keyboard
         self.assertEqual(buttons[0][0].callback_data, "certapp:sign_gbox:41")
+        self.assertEqual(buttons[1][0].callback_data, "certapp:import_gbox:41")
         self.assertIn("/certificate/install/private", buttons[-1][0].url)
         marked.assert_called_once_with(41)
 
