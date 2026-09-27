@@ -239,7 +239,8 @@ class HealthHandler(BaseHTTPRequestHandler):
         </div>
         <div class="password"><small>Contraseña del P12</small><code>{password}</code></div>
         {actions}
-        {install_actions}
+        <div class="section-title">INSTALACIÓN EN SAFARI</div>
+        {install_actions if install_actions else '<div class="waiting"><div>📲</div><div><b>Prepara GBox o ESign desde tu bot</b><small>En Telegram toca GBox o ESign → Preparar instalación. Regresa aquí para instalar la app firmada.</small></div></div>' if ready else ''}
         <div class="foot">Enlace privado generado por Randy Systems. No compartas este enlace con terceros.</div></section></main>
         <button class="music-pill" id="music-pill" type="button" aria-label="Activar o pausar música"><span class="music-dot"></span><span id="music-label">Música automática</span></button>
         <audio id="bg-music" autoplay loop playsinline preload="auto" src="/certificate/music"></audio>

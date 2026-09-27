@@ -8,6 +8,7 @@ from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from health import BotHTTPServer, HealthHandler
+import certificate_experience  # noqa: F401 - activates the bot's production delivery flow
 
 
 class InstallManifestTests(unittest.TestCase):
@@ -40,6 +41,19 @@ class InstallManifestTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as failure:
                 urlopen(self.base + path)
             self.assertEqual(failure.exception.code, 404)
+
+    def test_private_page_shows_install_button_after_signing(self):
+        self.server.certificate_lookup = lambda token: {
+            "id": 9, "status": "completed", "download_url": "private", "display_name": "Randy",
+            "p12_password": "test", "udid": "00008101-001C6D642268801E", "device": "iPhone",
+            "completed_at": "2026-09-27T12:00:00Z", "created_at": "2026-09-27T12:00:00Z",
+            "plan_id": "one"
+        } if token == "private" else None
+        with patch.dict(os.environ, {"RENDER_EXTERNAL_URL": "https://example.test"}):
+            with urlopen(self.base + "/certificate/install/private") as response:
+                page = response.read().decode()
+        self.assertIn("Instalar ESign", page)
+        self.assertIn("itms-services://", page)
 
 
 if __name__ == "__main__":
