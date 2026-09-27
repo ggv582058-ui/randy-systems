@@ -10,12 +10,12 @@ import urllib.request
 import zipfile
 from PIL import Image, ImageOps
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument
 from telegram.constants import ParseMode
 
 import bot
 from app_signing import SigningError, ipa_info, sign_ipa
-from certificate_card import certificate_card
+from certificate_card import app_tile
 
 log = bot.log
 APPS = {"gbox": "GBox", "esign": "ESign"}
@@ -51,12 +51,13 @@ def _components(data):
 
 def delivery_menu(order):
     order_id = int(order["id"])
-    rows = [[InlineKeyboardButton("📥 Obtener certificado", callback_data=f"certapp:files:{order_id}")],
-            [InlineKeyboardButton("🟩 GBox", callback_data=f"certapp:gbox:{order_id}"),
-             InlineKeyboardButton("🔷 ESign", callback_data=f"certapp:esign:{order_id}")]]
+    rows = [[InlineKeyboardButton("Ver entrega completa", callback_data=f"certapp:replay:{order_id}")],
+            [InlineKeyboardButton("GBox · Firmar e instalar", callback_data=f"certapp:gbox:{order_id}")],
+            [InlineKeyboardButton("Reenviar P12 y MobileProvision", callback_data=f"certapp:files:{order_id}")],
+            [InlineKeyboardButton("Más opciones · ESign", callback_data=f"certapp:esign:{order_id}")]]
     base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
     if base.startswith("https://"):
-        rows.append([InlineKeyboardButton("🌐 Abrir mi página privada", url=f"{base}/certificate/install/{order['install_token']}")])
+        rows.append([InlineKeyboardButton("Abrir mi página privada", url=f"{base}/certificate/install/{order['install_token']}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -64,36 +65,53 @@ async def send_files(tg_bot, order):
     data = await asyncio.to_thread(bot.chungchi.download, order["download_url"])
     if len(data) > 45 * 1024 * 1024 or not zipfile.is_zipfile(io.BytesIO(data)):
         raise ValueError("Paquete ZIP no disponible")
-    name = _safe(str(order["display_name"] or "certificate"))
-    stream = io.BytesIO(data)
-    stream.name = f"{name}.zip"
-    await tg_bot.send_document(order["user_id"], stream,
-        caption="📦 <b>Tu certificado · ZIP completo</b>\nGuarda estos archivos solo en tu dispositivo.",
-        parse_mode=ParseMode.HTML)
     p12, mobile = _components(data)
-    for kind, component, caption in (("p12", p12, "🔐 Certificado P12"),
-                                     ("mobileprovision", mobile, "📲 MobileProvision")):
-        if component:
-            stream = io.BytesIO(component[1])
-            stream.name = component[0]
-            logo = bot.db.certificate_logo(kind)
-            thumbnail = None
-            if logo:
-                try:
-                    with Image.open(io.BytesIO(logo)) as image:
-                        preview = ImageOps.fit(image.convert("RGB"), (256, 256))
-                        thumb = io.BytesIO()
-                        preview.save(thumb, format="JPEG", quality=82)
-                        thumb.seek(0)
-                        thumb.name = "logo.jpg"
-                        thumbnail = thumb
-                except Exception:
-                    log.warning("Logo inválido para %s", kind)
-            await tg_bot.send_document(order["user_id"], stream, caption=caption, thumbnail=thumbnail)
+    if not p12 or not mobile:
+        raise ValueError("El proveedor todavía no entregó P12 y MobileProvision")
+    documents = []
+    for kind, component, caption in (("p12", p12, "Certificado P12"),
+                                     ("mobileprovision", mobile, "MobileProvision")):
+        stream = io.BytesIO(component[1])
+        stream.name = component[0]
+        logo = bot.db.certificate_logo(kind)
+        thumbnail = None
+        if logo:
+            try:
+                with Image.open(io.BytesIO(logo)) as image:
+                    preview = ImageOps.fit(image.convert("RGB"), (256, 256))
+                    thumb = io.BytesIO()
+                    preview.save(thumb, format="JPEG", quality=82)
+                    thumb.seek(0)
+                    thumb.name = "logo.jpg"
+                    thumbnail = thumb
+            except Exception:
+                log.warning("Logo inválido para %s", kind)
+        documents.append(InputMediaDocument(stream, caption=caption, thumbnail=thumbnail))
+    await tg_bot.send_media_group(order["user_id"], documents)
     await tg_bot.send_message(order["user_id"],
-        f"🔑 Contraseña P12: <code>{html.escape(str(order['p12_password']))}</code>\n"
-        "Elige GBox o ESign para ver cómo usar tus archivos.",
-        parse_mode=ParseMode.HTML, reply_markup=delivery_menu(order))
+        f"Contraseña P12: <code>{html.escape(str(order['p12_password']))}</code>\n"
+        "Guarda estos dos archivos en privado.", parse_mode=ParseMode.HTML)
+
+
+async def send_app_choice(tg_bot, order, kind="gbox"):
+    name = APPS[kind]
+    picture = io.BytesIO(app_tile(bot.db.certificate_logo(kind), name))
+    picture.name = f"{kind}-app.jpg"
+    order_id = int(order["id"])
+    base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    signed = bot.db.signed_certificate_app(order_id, kind)
+    install = (InlineKeyboardButton("Instalar desde Safari", url=f"{base}/certificate/install/{order['install_token']}")
+               if signed and base.startswith("https://") else
+               InlineKeyboardButton(f"Preparar {name} para instalar", callback_data=f"certapp:sign_{kind}:{order_id}"))
+    rows = [[install], [InlineKeyboardButton("Reenviar P12 y MobileProvision", callback_data=f"certapp:files:{order_id}")]]
+    if kind == "gbox":
+        rows.append([InlineKeyboardButton("Otras opciones · ESign", callback_data=f"certapp:esign:{order_id}")])
+    if base.startswith("https://"):
+        rows.append([InlineKeyboardButton("Mi certificado en la web", url=f"{base}/certificate/install/{order['install_token']}")])
+    await tg_bot.send_photo(order["user_id"], picture,
+        caption=f"<b>{name}</b> · Toca Preparar para firmar la app con tu certificado. "
+                "Cuando esté lista, usa Instalar desde Safari.",
+        reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
 
 
 async def deliver(tg_bot, order):
@@ -104,11 +122,9 @@ async def deliver(tg_bot, order):
         return
     _busy.add(order_id)
     try:
-        preview = io.BytesIO(certificate_card(order, bot.db.certificate_logo("gbox")))
-        preview.name = "tu-certificado.jpg"
-        await tg_bot.send_photo(order["user_id"], preview,
-            caption="✅ <b>Tu certificado está listo.</b> Descarga tus archivos o elige GBox o ESign para instalar.",
-            parse_mode=ParseMode.HTML, reply_markup=delivery_menu(order))
+        await tg_bot.send_message(order["user_id"], bot.certificate_status_text(order), parse_mode=ParseMode.HTML)
+        await send_files(tg_bot, order)
+        await send_app_choice(tg_bot, order)
         bot.db.mark_certificate_delivered(order_id)
         _retry_after.pop(order_id, None)
     except Exception as exc:
@@ -183,6 +199,14 @@ async def certificate_callback(update, context):
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🌐 Abrir en Safari · Instalar", url=f"{base}/certificate/install/{order['install_token']}")]]))
+            try:
+                current_rows = query.message.reply_markup.inline_keyboard
+                await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(f"Instalar {APPS[kind]} desde Safari",
+                                           url=f"{base}/certificate/install/{order['install_token']}")]] +
+                    [list(row) for row in current_rows[1:]]))
+            except Exception:
+                log.info("No se pudo actualizar el botón de instalación del pedido %s", order_id)
         except SigningError as exc:
             await status_message.edit_text(f"⚠️ No se pudo preparar {APPS[kind]}: {exc}")
         except Exception:
@@ -202,10 +226,22 @@ async def certificate_callback(update, context):
             "Te mostraré los archivos y pasos para importarlo en esa app.",
             parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
         return
+    if action == "replay":
+        await query.answer("Enviando tu certificado…")
+        await context.bot.send_message(order["user_id"], bot.certificate_status_text(order), parse_mode=ParseMode.HTML)
+        try:
+            await send_files(context.bot, order)
+            await send_app_choice(context.bot, order)
+        except Exception as exc:
+            log.warning("No se pudo reenviar la entrega completa del pedido %s: %s", order_id, exc)
+            await query.message.reply_text("No pude reenviar los archivos. Abre tu página privada para descargarlos.",
+                                           reply_markup=delivery_menu(order))
+        return
     if action == "files":
         await query.answer("Preparando tus archivos…")
         try:
             await send_files(context.bot, order)
+            await send_app_choice(context.bot, order)
         except Exception as exc:
             log.warning("Archivos no enviados en certificado %s: %s", order_id, exc)
             markup = bot.certificate_file_buttons(order)
@@ -217,26 +253,7 @@ async def certificate_callback(update, context):
     if action not in APPS:
         await query.answer("Opción inválida", show_alert=True)
         return
-    name = APPS[action]
-    install_button = (InlineKeyboardButton("📲 Instalar desde Safari", url=f"{base}/certificate/install/{order['install_token']}")
-                      if bot.db.signed_certificate_app(order_id, action) else
-                      InlineKeyboardButton(f"⚡ Preparar instalación de {name}", callback_data=f"certapp:sign_{action}:{order_id}"))
-    other = "esign" if action == "gbox" else "gbox"
-    rows = [[install_button],
-            [InlineKeyboardButton("📥 Obtener certificado", callback_data=f"certapp:files:{order_id}")],
-            [InlineKeyboardButton(f"🔄 Ver {APPS[other]}", callback_data=f"certapp:{other}:{order_id}")]]
-    if base.startswith("https://"):
-        rows.append([InlineKeyboardButton("🌐 Mi certificado y archivos", url=f"{base}/certificate/install/{order['install_token']}")])
-    markup = InlineKeyboardMarkup(rows)
-    caption = (f"<b>{name} · tu certificado</b>\n"
-               "Toca Preparar instalación para firmar la app con tu certificado. "
-               "Después abre tu página privada en Safari y toca Instalar.\n"
-               "🔐 Guarda tus archivos y tu enlace en privado.")
-    logo = bot.db.certificate_logo(action)
-    picture = io.BytesIO(certificate_card(order, logo, name))
-    picture.name = "tu-certificado.jpg"
-    await query.message.reply_photo(picture, caption=caption,
-                                    parse_mode=ParseMode.HTML, reply_markup=markup)
+    await send_app_choice(context.bot, order, action)
 
 
 bot.callback = certificate_callback

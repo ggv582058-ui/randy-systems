@@ -28,7 +28,7 @@ from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, 
 from config import load_settings
 from chungchi_api import ChungChiClient, ChungChiError
 from database import Database, InsufficientBalance, NotApproved, NotFound, OutOfStock, ProductRestricted, StoreError
-from health import start_health_server
+from health import HealthHandler, start_health_server
 from zentry_api import ZentryClient, ZentryError
 
 
@@ -649,6 +649,19 @@ def certificate_status_text(order) -> str:
         "revoked": "Revocado",
     }
     label = labels.get(order["status"], order["status"])
+    if order["status"] == "completed":
+        registered = HealthHandler._pretty_date(order["completed_at"] or order["created_at"])
+        device = "iPhone" if order["device"] == "iphone" else "iPad" if order["device"] == "ipad" else str(order["device"] or "iPhone")
+        return (
+            "<b>RANDY MOD  /  TU CERTIFICADO</b>\n\n"
+            "✓ Estado: <b>Firmado</b>\n"
+            f"◈ Nombre: <b>{html.escape(str(order['display_name'] or 'Certificado'))}</b>\n"
+            f"⌗ UDID: <code>{html.escape(str(order['udid']))}</code>\n"
+            f"▣ Registrado: <b>{html.escape(registered)}</b>\n"
+            f"◷ Garantía estimada: <b>{html.escape(HealthHandler._warranty(order))}</b>\n"
+            f"⚡ Plan: <b>#{html.escape(str(order['plan_id']))}</b>\n"
+            f"▯ Equipo: <b>{html.escape(device)}</b>"
+        )
     return (
         "🍎 <b>RANDY MOD · TU CERTIFICADO</b>\n━━━━━━━━━━━━━━━━━━\n"
         f"🟢 Estado: <b>{html.escape(label)}</b>\n"
@@ -1189,7 +1202,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 await refresh_certificate_order(context.bot, row)
                 row = db.certificate_order(row["id"], message.from_user.id)
             buttons = certificate_file_buttons(row)
-            cover = (db.certificate_offer_photo() or randy_cover()) if index == 0 else None
+            cover = (db.certificate_offer_photo() or randy_cover()) if index == 0 and row["status"] != "completed" else None
             if cover:
                 picture = io.BytesIO(cover)
                 picture.name = "randy-certificate.jpg"

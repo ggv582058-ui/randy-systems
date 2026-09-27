@@ -82,8 +82,14 @@ directamente de su sitio oficial con el botón correspondiente o subir su IPA.
 Ambas IPA se guardan en la base de datos persistente; reemplazar una elimina las
 firmas previas de esa app. No se suben IPA ni P12 a servidores de terceros.
 
-Cuando un comprador tenga un certificado completo, toca GBox o ESign y luego
-**Preparar instalación**. El bot valida el perfil y el UDID, compila `zsign` desde
+Cuando el proveedor complete el certificado, el bot envía primero la ficha con
+estado, nombre, UDID, fecha, garantía estimada y dispositivo; después manda el
+P12 y MobileProvision como un grupo de documentos, la contraseña y una tarjeta
+compacta de GBox con el logo dentro. El enlace a la web privada va al final.
+Los pedidos previos pueden abrir **Ver entrega completa** sin volver a comprar.
+
+El comprador toca **Preparar GBox para instalar** (o elige ESign en Otras opciones).
+El bot valida el perfil y el UDID, compila `zsign` desde
 una revisión fijada de su repositorio oficial en el disco persistente y firma
 localmente. Si la firma termina, ofrece la página privada para instalar desde
 Safari; el manifest y la IPA firmada solo responden mientras el token privado
