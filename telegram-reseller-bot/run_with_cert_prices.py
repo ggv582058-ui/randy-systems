@@ -255,12 +255,12 @@ async def callback(update, context):
             f"🔑 Key: <code>{issued['key_code']}</code>\n"
             f"💵 Precio aplicado: <b>{bot.money(price)}</b>\n"
             f"💰 Saldo restante: <b>{bot.money(issued['balance_cents'])}</b>\n\n"
-            "📲 Ahora registra tu UDID. Cuando el certificado esté listo quedará guardado en <b>💠 Tu certificado</b> y tendrás tu web privada de entrega.",
+            "📲 Primero elige iPhone o iPad; después registrarás el UDID. Cuando esté listo quedará guardado en <b>💠 Tu certificado</b>.",
             reply_markup=bot.certificate_menu(bot.language_of(user)),
             parse_mode=ParseMode.HTML,
         )
-        context.user_data["flow"] = {"name": "certificate_udid", "certificate_key": issued["key_code"]}
-        await query.message.reply_text("📱 Envía el UDID del iPhone o iPad:")
+        context.user_data["flow"] = {"name": "certificate_device", "certificate_key": issued["key_code"]}
+        await bot.ask_certificate_device(query.message)
         return
 
     return await _original_callback(update, context)

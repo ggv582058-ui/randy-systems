@@ -590,15 +590,24 @@ async def begin_certificate_key(update: Update, context: ContextTypes.DEFAULT_TY
         if not row or row["status"] != "available":
             await update.effective_message.reply_text("❌ Esa key no existe, no te pertenece o ya fue utilizada.")
             return
-        context.user_data["flow"] = {"name": "certificate_udid", "certificate_key": row["key_code"]}
-        await update.effective_message.reply_text(
-            "📱 Envía el <b>UDID</b> del iPhone o iPad.", parse_mode=ParseMode.HTML,
-            reply_markup=certificate_menu(language_of(current_user(update)))
-        )
+        context.user_data["flow"] = {"name": "certificate_device", "certificate_key": row["key_code"]}
+        await ask_certificate_device(update.effective_message)
         return
     context.user_data["flow"] = {"name": "certificate_key"}
     await update.effective_message.reply_text(
         "🔑 Envía tu key de certificado:", reply_markup=certificate_menu(language_of(current_user(update)))
+    )
+
+
+async def ask_certificate_device(message) -> None:
+    await message.reply_text(
+        "🍎 <b>REGISTRAR CERTIFICADO</b>\n━━━━━━━━━━━━━━━━━━\n"
+        "<b>01 / Dispositivo</b>\nSelecciona el equipo donde lo usarás:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("📱 iPhone", callback_data="certdevice:iphone"),
+            InlineKeyboardButton("▣ iPad", callback_data="certdevice:ipad"),
+        ]]),
     )
 
 
@@ -636,14 +645,19 @@ async def show_certificate_welcome(update: Update, context: ContextTypes.DEFAULT
 def certificate_status_text(order) -> str:
     labels = {
         "submitting": "Enviando", "pending": "Procesando", "processing": "Procesando",
-        "review": "Verificación", "completed": "Completado", "failed": "Fallido", "cancelled": "Cancelado",
+        "review": "Verificación", "completed": "Firmado", "failed": "Fallido", "cancelled": "Cancelado",
+        "revoked": "Revocado",
     }
     label = labels.get(order["status"], order["status"])
     return (
-        f"🍎 <b>Certificado #{order['id']}</b>\n"
-        f"UDID: <code>{html.escape(order['udid'])}</code>\n"
-        f"Estado: <b>{html.escape(label)}</b>\n"
-        f"Pedido: <code>{html.escape(order['provider_order_code'] or 'pendiente')}</code>"
+        "🍎 <b>RANDY MOD · TU CERTIFICADO</b>\n━━━━━━━━━━━━━━━━━━\n"
+        f"🟢 Estado: <b>{html.escape(label)}</b>\n"
+        f"👤 Nombre: <b>{html.escape(str(order['display_name'] or 'Certificado'))}</b>\n"
+        f"🆔 UDID: <code>{html.escape(order['udid'])}</code>\n"
+        f"📱 Equipo: <b>{html.escape(str(order['device'] or 'iPhone'))}</b>\n"
+        f"📅 Registro: <b>{html.escape(str(order['completed_at'] or order['created_at'] or 'Pendiente')[:10])}</b>\n"
+        f"🧾 Pedido: <code>{html.escape(order['provider_order_code'] or 'pendiente')}</code>\n\n"
+        "Toca <b>Obtener certificado</b> para recibir los archivos por Telegram."
     )
 
 
@@ -1098,8 +1112,8 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         if not row or row["status"] != "available":
             await message.reply_text("❌ Key inválida, usada o perteneciente a otra cuenta.")
             return True
-        flow["name"], flow["certificate_key"] = "certificate_udid", row["key_code"]
-        await message.reply_text("📱 Envía el UDID del iPhone o iPad:")
+        flow["name"], flow["certificate_key"] = "certificate_device", row["key_code"]
+        await ask_certificate_device(message)
         return True
 
     if flow["name"] == "certificate_udid":
@@ -1107,6 +1121,10 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             await message.reply_text("❌ UDID inválido. Debe contener únicamente letras A-F, números y guiones.")
             return True
         flow["udid"] = text.upper()
+        if flow.get("device"):
+            flow["name"] = "certificate_password"
+            await message.reply_text("🔐 <b>03 / Contraseña P12</b>\nElige una contraseña para tu certificado:", parse_mode=ParseMode.HTML)
+            return True
         flow["name"] = "certificate_device"
         keys = InlineKeyboardMarkup([[
             InlineKeyboardButton("📱 iPhone", callback_data="certdevice:iphone"),
@@ -1163,13 +1181,20 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 reply_markup=certificate_menu(language_of(current_user(update))),
             )
             return True
-        for row in rows[:5]:
+        for index, row in enumerate(rows[:5]):
             row = db.renew_certificate_link(row["id"], message.from_user.id, settings.certificate_link_ttl_hours)
-            if row["provider_order_code"] and row["status"] not in ("completed", "failed", "cancelled"):
+            if row["provider_order_code"] and row["status"] not in ("failed", "cancelled"):
                 await refresh_certificate_order(context.bot, row)
                 row = db.certificate_order(row["id"], message.from_user.id)
             buttons = certificate_file_buttons(row)
-            await message.reply_text(certificate_status_text(row), reply_markup=buttons, parse_mode=ParseMode.HTML)
+            cover = (db.certificate_offer_photo() or randy_cover()) if index == 0 else None
+            if cover:
+                picture = io.BytesIO(cover)
+                picture.name = "randy-certificate.jpg"
+                await message.reply_photo(picture, caption=certificate_status_text(row),
+                                          reply_markup=buttons, parse_mode=ParseMode.HTML)
+            else:
+                await message.reply_text(certificate_status_text(row), reply_markup=buttons, parse_mode=ParseMode.HTML)
         return True
 
     if flow["name"] == "partner_login":
@@ -1761,14 +1786,18 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.answer("La solicitud expiró", show_alert=True)
             return
         flow["device"] = device
-        flow["name"] = "certificate_password"
+        flow["name"] = "certificate_password" if flow.get("udid") else "certificate_udid"
         await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text(
-            "🔐 Escribe la contraseña que deseas para el archivo <code>.p12</code>.\n"
-            "Puedes escribir <code>1</code> para usar la contraseña sencilla.",
-            parse_mode=ParseMode.HTML,
-        )
+        if flow["name"] == "certificate_udid":
+            await query.message.reply_text(
+                "🆔 <b>02 / UDID</b>\nEnvía el UDID de tu iPhone o iPad.\n"
+                "Revísalo antes de continuar: debe corresponder al dispositivo seleccionado.",
+                parse_mode=ParseMode.HTML)
+        else:
+            await query.message.reply_text(
+                "🔐 <b>03 / Contraseña P12</b>\nEscribe una contraseña para tu certificado.",
+                parse_mode=ParseMode.HTML)
         return
 
     if data == "cert:create":

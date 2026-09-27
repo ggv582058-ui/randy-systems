@@ -63,6 +63,31 @@ class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("certificate_pending", self.context.user_data)
         self.assertIn("Envía el UDID", self.reply.await_args.args[0])
 
+    async def test_device_selection_precedes_udid_and_password(self):
+        row = {"key_code": "CERT-TEST", "status": "available"}
+        with patch.object(bot.db, "certificate_key", return_value=row):
+            await bot.begin_certificate_key(self.update, self.context, "CERT-TEST")
+        self.assertEqual(self.context.user_data["flow"]["name"], "certificate_device")
+        buttons = self.reply.await_args.kwargs["reply_markup"].inline_keyboard[0]
+        self.assertEqual([button.callback_data for button in buttons],
+                         ["certdevice:iphone", "certdevice:ipad"])
+
+        query = SimpleNamespace(data="certdevice:iphone", from_user=SimpleNamespace(id=2),
+                                answer=AsyncMock(), edit_message_reply_markup=AsyncMock(),
+                                message=SimpleNamespace(reply_text=self.reply))
+        update = SimpleNamespace(callback_query=query, effective_user=query.from_user)
+        with patch.object(bot, "current_user", return_value=self.user), \
+             patch.object(bot, "panel", return_value="reseller"):
+            await bot.callback(update, self.context)
+        self.assertEqual(self.context.user_data["flow"]["name"], "certificate_udid")
+
+        message = SimpleNamespace(text="00008120-001C41480C23601E",
+                                  from_user=SimpleNamespace(id=2), reply_text=self.reply)
+        with patch.object(bot, "current_user", return_value=self.user):
+            await bot.handle_flow(SimpleNamespace(effective_message=message), self.context)
+        self.assertEqual(self.context.user_data["flow"]["name"], "certificate_password")
+        self.assertIn("Contraseña P12", self.reply.await_args.args[0])
+
 
 if __name__ == "__main__":
     unittest.main()
