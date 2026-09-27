@@ -2677,7 +2677,7 @@ async def run_bots() -> None:
 
         server.configure_certificates(certificate_lookup, certificate_download, certificate_webhook,
                                       db.certificate_offer_photo, db.certificate_logo,
-                                      db.signed_certificate_app)
+                                      db.signed_certificate_app, db.set_certificate_ipa)
         poll_task = asyncio.create_task(certificate_poll_loop(reseller_app.bot, stop_event))
         announcement_task = asyncio.create_task(daily_announcement_loop(reseller_app.bot, stop_event))
         log.info("Bots iniciados por webhook: revendedores + admin (%s)", settings.store_name)

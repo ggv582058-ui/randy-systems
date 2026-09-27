@@ -1,11 +1,13 @@
 import asyncio
+import io
 import os
 import plistlib
 import threading
 import unittest
+import zipfile
 from unittest.mock import patch
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from health import BotHTTPServer, HealthHandler
 import certificate_experience  # noqa: F401 - activates the bot's production delivery flow
@@ -56,6 +58,28 @@ class InstallManifestTests(unittest.TestCase):
         self.assertIn("itms-services://", page)
         self.assertLess(page.index("Instalar ESign"), page.index("ARCHIVOS DEL CERTIFICADO"))
         self.assertIn('/certificate/logo/private/esign', page)
+
+    def test_esign_import_requires_secret_and_validates_source(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("Payload/ESign.app/Info.plist", plistlib.dumps({
+                "CFBundleIdentifier": "p3.xyz.yyyue.esign", "CFBundleShortVersionString": "5.0.2",
+                "CFBundleExecutable": "ESign",
+            }))
+            z.writestr("Payload/ESign.app/ESign", os.urandom(1200))
+        saved = []
+        self.server.certificate_ipa_save = lambda *args: saved.append(args)
+        with patch.dict(os.environ, {"IPA_IMPORT_SECRET": "a" * 64}):
+            url = self.base + "/maintenance/import-esign"
+            with self.assertRaises(HTTPError) as failure:
+                urlopen(Request(url, data=archive.getvalue(), method="POST"))
+            self.assertEqual(failure.exception.code, 404)
+            request = Request(url, data=archive.getvalue(), method="POST",
+                              headers={"X-IPA-Import-Secret": "a" * 64})
+            with urlopen(request) as response:
+                self.assertEqual(response.status, 200)
+        self.assertEqual(saved[0][0], "esign")
+        self.assertEqual(saved[0][2:], ("p3.xyz.yyyue.esign", "5.0.2"))
 
 
 if __name__ == "__main__":

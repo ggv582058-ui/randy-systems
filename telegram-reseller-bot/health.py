@@ -35,18 +35,20 @@ class BotHTTPServer(ThreadingHTTPServer):
         self.certificate_cover = None
         self.certificate_logo = None
         self.certificate_signed_lookup = None
+        self.certificate_ipa_save = None
 
     def configure(self, applications: dict, secrets: dict[str, str]) -> None:
         self.applications = applications
         self.secrets = secrets
 
-    def configure_certificates(self, lookup, download, webhook, cover=None, logo=None, signed_lookup=None) -> None:
+    def configure_certificates(self, lookup, download, webhook, cover=None, logo=None, signed_lookup=None, ipa_save=None) -> None:
         self.certificate_lookup = lookup
         self.certificate_download = download
         self.certificate_webhook = webhook
         self.certificate_cover = cover
         self.certificate_logo = logo
         self.certificate_signed_lookup = signed_lookup
+        self.certificate_ipa_save = ipa_save
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -403,6 +405,36 @@ class HealthHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         server: BotHTTPServer = self.server
         path = urlsplit(self.path).path
+        if path == "/maintenance/import-esign":
+            secret = os.getenv("IPA_IMPORT_SECRET", "")
+            supplied = self.headers.get("X-IPA-Import-Secret", "")
+            if not secret or len(secret) < 48 or not hmac.compare_digest(secret, supplied):
+                self.send_error(404)
+                return
+            if not server.certificate_ipa_save:
+                self.send_error(503)
+                return
+            try:
+                from app_signing import ipa_info
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 1024 <= length <= 19 * 1024 * 1024:
+                    raise ValueError("Tamaño inválido")
+                payload = self.rfile.read(length)
+                bundle_id, version = ipa_info(payload)
+                if bundle_id != "p3.xyz.yyyue.esign" or version != "5.0.2":
+                    raise ValueError("Aplicación inesperada")
+                server.certificate_ipa_save("esign", payload, bundle_id, version)
+            except (ValueError, OSError):
+                self.send_error(400, "IPA inválida")
+                return
+            body = json.dumps({"status": "ok", "app": "esign", "version": version}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/chungchi/webhook":
             try:
                 length = int(self.headers.get("Content-Length", "0"))

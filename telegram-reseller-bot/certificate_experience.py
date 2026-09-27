@@ -56,9 +56,8 @@ def _components(data):
 def delivery_menu(order):
     order_id = int(order["id"])
     rows = [[InlineKeyboardButton("Ver entrega completa", callback_data=f"certapp:replay:{order_id}")],
-            [InlineKeyboardButton("GBox · Firmar e instalar", callback_data=f"certapp:gbox:{order_id}")],
-            [InlineKeyboardButton("Reenviar P12 y MobileProvision", callback_data=f"certapp:files:{order_id}")],
-            [InlineKeyboardButton("Más opciones · ESign", callback_data=f"certapp:esign:{order_id}")]]
+            [InlineKeyboardButton("GBox", callback_data=f"certapp:gbox:{order_id}"),
+             InlineKeyboardButton("ESign", callback_data=f"certapp:esign:{order_id}")]]
     base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
     if base.startswith("https://"):
         rows.append([InlineKeyboardButton("Abrir mi página privada", url=f"{base}/certificate/install/{order['install_token']}")])
@@ -108,8 +107,6 @@ async def send_app_choice(tg_bot, order, kind="gbox"):
                if signed and base.startswith("https://") else
                InlineKeyboardButton(f"Preparar {name} para instalar", callback_data=f"certapp:sign_{kind}:{order_id}"))
     rows = [[install], [InlineKeyboardButton(f"Usar P12 y perfil en {name}", callback_data=f"certapp:import_{kind}:{order_id}")]]
-    if kind == "gbox":
-        rows.append([InlineKeyboardButton("Otras opciones · ESign", callback_data=f"certapp:esign:{order_id}")])
     if base.startswith("https://"):
         rows.append([InlineKeyboardButton("Mi certificado en la web", url=f"{base}/certificate/install/{order['install_token']}")])
     await tg_bot.send_photo(order["user_id"], picture,
