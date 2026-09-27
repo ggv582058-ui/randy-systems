@@ -647,6 +647,22 @@ def certificate_status_text(order) -> str:
     )
 
 
+def certificate_file_buttons(order) -> InlineKeyboardMarkup | None:
+    base_url = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    if not base_url.startswith("https://") or not order["install_token"]:
+        return None
+    root = f"{base_url}/certificate"
+    token = order["install_token"]
+    rows = [[InlineKeyboardButton("🌐 Abrir certificado", url=f"{root}/install/{token}")]]
+    if order["status"] == "completed" and order["download_url"]:
+        rows.extend([
+            [InlineKeyboardButton("📦 Descargar ZIP", url=f"{root}/download/{token}")],
+            [InlineKeyboardButton("🔐 P12", url=f"{root}/component/{token}/p12"),
+             InlineKeyboardButton("📲 MobileProvision", url=f"{root}/component/{token}/mobileprovision")],
+        ])
+    return InlineKeyboardMarkup(rows)
+
+
 async def deliver_certificate(bot, order) -> None:
     if order["status"] != "completed" or not order["download_url"]:
         return
@@ -654,9 +670,7 @@ async def deliver_certificate(bot, order) -> None:
     if order_id in _delivery_in_progress or time.monotonic() < _delivery_retry_after.get(order_id, 0):
         return
     _delivery_in_progress.add(order_id)
-    base_url = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
-    install_url = f"{base_url}/certificate/install/{order['install_token']}"
-    keys = InlineKeyboardMarkup([[InlineKeyboardButton("📲 Instalar certificado", url=install_url)]])
+    keys = certificate_file_buttons(order)
     try:
         data = await asyncio.to_thread(chungchi.download, order["download_url"])
         stream = io.BytesIO(data)
@@ -1154,12 +1168,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             if row["provider_order_code"] and row["status"] not in ("completed", "failed", "cancelled"):
                 await refresh_certificate_order(context.bot, row)
                 row = db.certificate_order(row["id"], message.from_user.id)
-            buttons = None
-            if row["status"] == "completed":
-                base_url = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
-                buttons = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("📲 Instalar certificado", url=f"{base_url}/certificate/install/{row['install_token']}")
-                ]])
+            buttons = certificate_file_buttons(row)
             await message.reply_text(certificate_status_text(row), reply_markup=buttons, parse_mode=ParseMode.HTML)
         return True
 
@@ -1402,7 +1411,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         tg_file = await context.bot.get_file(photo_info.file_id)
         db.set_certificate_offer_photo(bytes(await tg_file.download_as_bytearray()))
         context.user_data.pop("flow", None)
-        await message.reply_text("✅ Foto del certificado guardada. Aparecerá al tocar 🍎 Certificado iOS.", reply_markup=ADMIN_MENU)
+        await message.reply_text("✅ Foto del certificado guardada. Aparecerá en 🍎 Certificado iOS y en la página privada de entrega.", reply_markup=ADMIN_MENU)
         return True
 
     if flow["name"] == "product_sticker":
@@ -2512,7 +2521,8 @@ async def run_bots() -> None:
             )
             return True
 
-        server.configure_certificates(certificate_lookup, certificate_download, certificate_webhook)
+        server.configure_certificates(certificate_lookup, certificate_download, certificate_webhook,
+                                      db.certificate_offer_photo)
         poll_task = asyncio.create_task(certificate_poll_loop(reseller_app.bot, stop_event))
         announcement_task = asyncio.create_task(daily_announcement_loop(reseller_app.bot, stop_event))
         log.info("Bots iniciados por webhook: revendedores + admin (%s)", settings.store_name)
