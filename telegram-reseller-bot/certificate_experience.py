@@ -34,6 +34,8 @@ def _components(data):
                 if name.endswith("/"):
                     continue
                 low = name.lower()
+                if z.getinfo(name).file_size > 12 * 1024 * 1024:
+                    continue
                 if p12 is None and low.endswith((".p12", ".pfx")):
                     p12 = (name.rsplit("/", 1)[-1], z.read(name))
                 elif mobile is None and low.endswith((".mobileprovision", ".provisionprofile")):
@@ -45,53 +47,64 @@ def _components(data):
     return p12, mobile
 
 
+def delivery_menu(order):
+    order_id = int(order["id"])
+    rows = [[InlineKeyboardButton("📥 Obtener certificado", callback_data=f"certapp:files:{order_id}")],
+            [InlineKeyboardButton("🟩 GBox", callback_data=f"certapp:gbox:{order_id}"),
+             InlineKeyboardButton("🪶 Feather", callback_data=f"certapp:feather:{order_id}")],
+            [InlineKeyboardButton("🔷 ESign", callback_data=f"certapp:esign:{order_id}"),
+             InlineKeyboardButton("🔹 KSign", callback_data=f"certapp:ksign:{order_id}")],
+            [InlineKeyboardButton("🔻 Scarlet", callback_data=f"certapp:scarlet:{order_id}")]]
+    base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    if base.startswith("https://"):
+        rows.append([InlineKeyboardButton("🌐 Abrir mi página privada", url=f"{base}/certificate/install/{order['install_token']}")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def send_files(tg_bot, order):
+    data = await asyncio.to_thread(bot.chungchi.download, order["download_url"])
+    if len(data) > 45 * 1024 * 1024 or not zipfile.is_zipfile(io.BytesIO(data)):
+        raise ValueError("Paquete ZIP no disponible")
+    name = _safe(str(order["display_name"] or "certificate"))
+    stream = io.BytesIO(data)
+    stream.name = f"{name}.zip"
+    await tg_bot.send_document(order["user_id"], stream,
+        caption="📦 <b>Tu certificado · ZIP completo</b>\nGuarda estos archivos solo en tu dispositivo.",
+        parse_mode=ParseMode.HTML)
+    p12, mobile = _components(data)
+    for component, caption in ((p12, "🔐 Certificado P12"), (mobile, "📲 MobileProvision")):
+        if component:
+            stream = io.BytesIO(component[1])
+            stream.name = component[0]
+            await tg_bot.send_document(order["user_id"], stream, caption=caption)
+    await tg_bot.send_message(order["user_id"],
+        f"🔑 Contraseña P12: <code>{html.escape(str(order['p12_password']))}</code>\n"
+        "Usa los botones para elegir la app donde importarás estos archivos.",
+        parse_mode=ParseMode.HTML, reply_markup=delivery_menu(order))
+
+
 async def deliver(tg_bot, order):
     if order["status"] != "completed" or not order["download_url"]:
         return
-    oid = int(order["id"])
-    if oid in _busy or time.monotonic() < _retry_after.get(oid, 0):
+    order_id = int(order["id"])
+    if order_id in _busy or time.monotonic() < _retry_after.get(order_id, 0):
         return
-    _busy.add(oid)
-    base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
-    web = f"{base}/certificate/install/{order['install_token']}" if base.startswith("https://") else ""
-    rows = []
-    if web:
-        rows = list(bot.certificate_file_buttons(order).inline_keyboard)
-    rows.append([InlineKeyboardButton("📱 Elegir app para firmar", callback_data=f"certapp:choose:{oid}")])
-    markup = InlineKeyboardMarkup(rows)
+    _busy.add(order_id)
     try:
-        data = await asyncio.to_thread(bot.chungchi.download, order["download_url"])
-        name = _safe(str(order["display_name"] or "certificate"))
-        stream = io.BytesIO(data)
-        stream.name = f"{name}.zip"
-        await tg_bot.send_document(order["user_id"], stream, caption=(
+        await tg_bot.send_message(order["user_id"],
             "✅ <b>CERTIFICADO LISTO</b>\n━━━━━━━━━━━━━━━━━━\n"
-            f"📦 Nombre: <b>{html.escape(str(order['display_name']))}</b>\n"
-            f"🆔 UDID: <code>{html.escape(str(order['udid']))}</code>\n"
-            f"🔐 Contraseña P12: <code>{html.escape(str(order['p12_password']))}</code>\n"
-            "📥 ZIP completo enviado. También intento enviarte P12 y MobileProvision por separado.\n\n"
-            "📱 Para usar el certificado, toca <b>Elegir app para firmar</b>."
-        ), reply_markup=markup, parse_mode=ParseMode.HTML)
-        p12, mobile = _components(data)
-        if p12:
-            s = io.BytesIO(p12[1]); s.name = p12[0]
-            try: await tg_bot.send_document(order["user_id"], s, caption="🔐 Archivo P12")
-            except Exception as exc: log.warning("P12 no enviado %s: %s", oid, exc)
-        if mobile:
-            s = io.BytesIO(mobile[1]); s.name = mobile[0]
-            try: await tg_bot.send_document(order["user_id"], s, caption="📲 MobileProvision")
-            except Exception as exc: log.warning("MobileProvision no enviado %s: %s", oid, exc)
-        bot.db.mark_certificate_delivered(oid)
-        _retry_after.pop(oid, None)
+            f"📱 Dispositivo: <b>{html.escape(str(order['device']))}</b>\n"
+            f"🆔 UDID: <code>{html.escape(str(order['udid']))}</code>\n\n"
+            "Elige tu app o toca <b>Obtener certificado</b> para recibir ZIP, P12 y MobileProvision aquí mismo. "
+            "También puedes abrir tu página privada.",
+            parse_mode=ParseMode.HTML, reply_markup=delivery_menu(order))
+        bot.db.mark_certificate_delivered(order_id)
+        _retry_after.pop(order_id, None)
     except Exception as exc:
-        log.warning("Entrega ZIP falló %s: %s", oid, exc)
-        _retry_after[oid] = time.monotonic() + 60
-        try:
-            await tg_bot.send_message(order["user_id"], "⚠️ El certificado está listo, pero Telegram no recibió el ZIP. Usa la web privada mientras lo reintento automáticamente.", reply_markup=markup)
-        except Exception:
-            pass
+        log.warning("No se pudo avisar del certificado %s: %s", order_id, exc)
+        _retry_after[order_id] = time.monotonic() + 60
     finally:
-        _busy.discard(oid)
+        _busy.discard(order_id)
 
 
 def page(self, token):
@@ -108,7 +121,7 @@ def page(self, token):
     token_safe = html.escape(token, quote=True)
     if ready:
         actions = '''<section class="glass files" id="files"><div class="section-kicker">02 / ARCHIVOS PERSONALES</div>
-        <h2>Tu kit de certificado</h2><p>Baja el paquete completo o cada archivo por separado. Guárdalos en Archivos de tu iPhone.</p>
+        <h2>Tu kit de certificado</h2><p>Baja el paquete completo o cada archivo por separado. Si el navegador de Telegram no lo guarda, usa el botón del bot «Obtener certificado» o abre este enlace en Safari.</p>
         <a class="download major" href="/certificate/download/__TOKEN__"><span class="ico">↓</span><span><b>Descargar ZIP completo</b><small>P12 + MobileProvision</small></span><span>↗</span></a>
         <div class="file-grid"><a class="download" href="/certificate/component/__TOKEN__/p12"><span class="ico">⌁</span><span><b>Certificado P12</b><small>Identidad de firma</small></span></a>
         <a class="download" href="/certificate/component/__TOKEN__/mobileprovision"><span class="ico">▣</span><span><b>MobileProvision</b><small>Perfil del dispositivo</small></span></a></div>
@@ -129,7 +142,7 @@ def page(self, token):
     <section class="glass"><div class="section-kicker">01 / INFORMACIÓN</div><h2>Datos del certificado</h2><div class="details"><div class="detail"><small>NOMBRE</small><strong>__NAME__</strong></div><div class="detail"><small>DISPOSITIVO</small><strong>__DEVICE__</strong></div><div class="detail"><small>UDID</small><strong>__UDID__</strong></div><div class="detail"><small>REGISTRADO</small><strong>__DATE__</strong></div><div class="detail"><small>GARANTÍA RESTANTE</small><strong>__WARRANTY__</strong></div><div class="detail"><small>PLAN</small><strong>#__PLAN__</strong></div></div></section>__ACTIONS__
     <section class="glass"><div class="section-kicker">04 / GUÍA RÁPIDA</div><h2>Míralo en 12 segundos</h2><p>Descarga los archivos, impórtalos en tu app y luego selecciona tu IPA.</p><video controls playsinline preload="metadata" style="display:block;width:100%;border-radius:18px;background:#04132a" src="/certificate/tutorial"></video></section>
     <p class="hint">La firma ocurre dentro de la app que elijas. Esta página entrega tus archivos y te guía para importarlos.</p><footer class="footer"><span>© 2026 RANDY MOD</span><button class="music" id="music" type="button">♫ Activar música</button></footer></main><audio id="bgm" loop playsinline src="/certificate/music"></audio>
-    <script>const a=document.getElementById('bgm'),m=document.getElementById('music');const play=()=>a.play().then(()=>m.textContent='♫ Pausar música').catch(()=>m.textContent='♫ Activar música');m.addEventListener('click',()=>a.paused?play():(a.pause(),m.textContent='♫ Activar música'));document.querySelectorAll('.app').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.app').forEach(x=>x.classList.remove('selected'));b.classList.add('selected');document.getElementById('selected-app').textContent=b.dataset.app;document.querySelectorAll('.app-name').forEach(x=>x.textContent=b.dataset.app)}));document.getElementById('copy-password')?.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(__PASSWORD__);document.getElementById('secret-label').textContent='✓ Contraseña copiada'}catch(e){document.getElementById('secret-label').textContent='No se pudo copiar'}});</script></body></html>'''
+    <script>const a=document.getElementById('bgm'),m=document.getElementById('music');const play=()=>a.play().then(()=>m.textContent='♫ Pausar música').catch(()=>m.textContent='♫ Toca para activar música');play();document.addEventListener('pointerdown',e=>{if(a.paused&&!e.target.closest('#music'))play()},{once:true});m.addEventListener('click',()=>a.paused?play():(a.pause(),m.textContent='♫ Activar música'));document.querySelectorAll('.app').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.app').forEach(x=>x.classList.remove('selected'));b.classList.add('selected');document.getElementById('selected-app').textContent=b.dataset.app;document.querySelectorAll('.app-name').forEach(x=>x.textContent=b.dataset.app)}));document.getElementById('copy-password')?.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(__PASSWORD__);document.getElementById('secret-label').textContent='✓ Contraseña copiada'}catch(e){document.getElementById('secret-label').textContent='No se pudo copiar'}});</script></body></html>'''
     from datetime import datetime, timezone
     try:
         dt = datetime.fromisoformat(str(order["completed_at"] or order["created_at"]).replace("Z", "+00:00"))
@@ -184,15 +197,27 @@ async def certificate_callback(update, context):
             "Te mostraré los archivos y pasos para importarlo en esa app.",
             parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
         return
+    if action == "files" or action in APPS:
+        await query.answer("Preparando tus archivos…")
+        try:
+            await send_files(context.bot, order)
+        except Exception as exc:
+            log.warning("Archivos no enviados en certificado %s: %s", order_id, exc)
+            markup = bot.certificate_file_buttons(order)
+            await query.message.reply_text(
+                "⚠️ No pude enviarte los archivos por Telegram. Abre tu enlace privado y toca Descargar ZIP; "
+                "si estás en el navegador integrado, usa Compartir → Abrir en Safari.", reply_markup=markup)
+            return
+        if action == "files":
+            return
     if action not in APPS:
         await query.answer("Opción inválida", show_alert=True)
         return
-    await query.answer()
     name = APPS[action]
     markup = bot.certificate_file_buttons(order)
     await query.message.reply_text(
         f"📲 <b>{name} · tu certificado</b>\n\n"
-        "1. Descarga el P12 y MobileProvision (o el ZIP completo).\n"
+        "1. Guarda el P12 y MobileProvision que acabo de enviarte.\n"
         f"2. Abre {name} e importa el certificado y el perfil.\n"
         "3. Escribe la contraseña P12 que recibiste en el mensaje privado.\n"
         "4. Selecciona tu IPA dentro de la app y sigue sus pasos para firmar.\n\n"
