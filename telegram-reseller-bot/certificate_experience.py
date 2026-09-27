@@ -6,6 +6,7 @@ import io
 import os
 import re
 import time
+import urllib.request
 import zipfile
 from PIL import Image, ImageOps
 
@@ -13,7 +14,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 
 import bot
-from app_signing import SigningError, sign_ipa
+from app_signing import SigningError, ipa_info, sign_ipa
 from certificate_card import certificate_card
 
 log = bot.log
@@ -149,10 +150,6 @@ async def certificate_callback(update, context):
                                            reply_markup=InlineKeyboardMarkup([[
                                                InlineKeyboardButton("🌐 Abrir en Safari · Instalar", url=f"{base}/certificate/install/{order['install_token']}")]]))
             return
-        source = bot.db.certificate_ipa(kind)
-        if not source:
-            await query.answer("La IPA todavía no está cargada. Avisa al administrador.", show_alert=True)
-            return
         if key in _signing:
             await query.answer("La firma ya está en curso", show_alert=True)
             return
@@ -160,6 +157,21 @@ async def certificate_callback(update, context):
         await query.answer("Preparando firma privada…")
         status_message = await query.message.reply_text(f"⏳ Firmando {APPS[kind]} para tu dispositivo. Puede tardar unos minutos.")
         try:
+            source = bot.db.certificate_ipa(kind)
+            if not source and kind == "gbox":
+                await status_message.edit_text("⏳ Descargando GBox oficial para preparar tu instalación…")
+                def load_gbox():
+                    request = urllib.request.Request("https://cdn.gbox.run/d/apps/GBox_v6.1.2.ipa",
+                                                     headers={"User-Agent": "RandyCertificates/1.0"})
+                    with urllib.request.urlopen(request, timeout=35) as response:
+                        payload = response.read(19 * 1024 * 1024 + 1)
+                    bundle_id, version = ipa_info(payload)
+                    bot.db.set_certificate_ipa("gbox", payload, bundle_id, version)
+                await asyncio.to_thread(load_gbox)
+                source = bot.db.certificate_ipa(kind)
+                await status_message.edit_text("⏳ GBox cargada. Firmando para tu dispositivo…")
+            if not source:
+                raise SigningError("ESign aún no está cargada. Pide al administrador que suba su IPA como documento.")
             certificate = await asyncio.to_thread(bot.chungchi.download, order["download_url"])
             signed, bundle_id, version = await asyncio.to_thread(
                 sign_ipa, source["ipa"], certificate, order["p12_password"], order["udid"],
