@@ -226,4 +226,14 @@ async def certificate_callback(update, context):
 
 
 bot.callback = certificate_callback
+_original_file_buttons = bot.certificate_file_buttons
+
+
+def certificate_buttons_for_existing_order(order):
+    if order["status"] == "completed" and order["download_url"]:
+        return delivery_menu(order)
+    return _original_file_buttons(order)
+
+
+bot.certificate_file_buttons = certificate_buttons_for_existing_order
 log.info("Premium certificate web + ZIP/component delivery loaded")
