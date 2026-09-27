@@ -456,7 +456,16 @@ class Database:
             return None
         with self.connect() as con:
             row = con.execute("SELECT data FROM certificate_logos WHERE kind=?", (kind,)).fetchone()
-            return row["data"] if row else None
+            if row:
+                return row["data"]
+        # Ship the owner's GBox and ESign logos as defaults. Uploaded logos
+        # stored on the persistent disk always take precedence.
+        if kind in {"gbox", "esign"}:
+            try:
+                return Path(__file__).with_name(f"{kind}-logo.jpg").read_bytes()
+            except OSError:
+                pass
+        return None
 
     def reseller_ids(self) -> list[int]:
         with self.connect() as con:

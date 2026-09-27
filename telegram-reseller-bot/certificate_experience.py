@@ -18,6 +18,10 @@ import health
 
 log = bot.log
 APPS = {"gbox": "GBox", "esign": "ESign"}
+APP_SOURCES = {
+    "gbox": ("📦 Descargar GBox v6.1.2 · requiere firma", "https://cdn.gbox.run/d/apps/GBox_v6.1.2.ipa"),
+    "esign": ("📖 Ver descarga y guía ESign", "https://github.com/qbap/Esign-IPA-Installer"),
+}
 
 _busy = set()
 _retry_after = {}
@@ -225,16 +229,27 @@ async def certificate_callback(update, context):
         await query.answer("Opción inválida", show_alert=True)
         return
     name = APPS[action]
-    markup = bot.certificate_file_buttons(order)
-    await query.message.reply_text(
+    source_label, source_url = APP_SOURCES[action]
+    existing = bot.certificate_file_buttons(order)
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton(source_label, url=source_url)]] +
+                                  [list(row) for row in existing.inline_keyboard])
+    caption = (
         f"📲 <b>{name} · tu certificado</b>\n\n"
         "1. Toca Obtener certificado y guarda tu P12 y MobileProvision.\n"
         f"2. Abre {name} e importa el certificado y el perfil.\n"
         "3. Escribe la contraseña P12 que recibiste en el mensaje privado.\n"
         "4. Selecciona tu IPA dentro de la app y sigue sus pasos para firmar.\n\n"
         "Un enlace de instalación directa aparecerá cuando exista una IPA firmada y verificada para tu dispositivo.\n"
-        "🔐 Los archivos son personales. Comparte el enlace solo contigo.",
-        parse_mode=ParseMode.HTML, reply_markup=markup)
+        "🔐 Los archivos son personales. Comparte el enlace solo contigo."
+    )
+    logo = bot.db.certificate_logo(action)
+    if logo:
+        picture = io.BytesIO(logo)
+        picture.name = f"{action}-logo.jpg"
+        await query.message.reply_photo(picture, caption=caption,
+                                        parse_mode=ParseMode.HTML, reply_markup=markup)
+    else:
+        await query.message.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 bot.callback = certificate_callback

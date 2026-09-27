@@ -9,8 +9,10 @@ from database import Database, InsufficientBalance, OutOfStock, ProductRestricte
 
 class DatabaseTests(unittest.TestCase):
     def test_certificate_logos_persist_across_restart(self):
+        self.assertTrue(self.db.certificate_logo("gbox").startswith(b"\xff\xd8\xff"))
+        self.assertTrue(self.db.certificate_logo("esign").startswith(b"\xff\xd8\xff"))
         self.db.set_certificate_logo("gbox", b"\xff\xd8\xffexample")
-        self.assertIsNone(self.db.certificate_logo("esign"))
+        self.assertIsNone(self.db.certificate_logo("p12"))
         restarted = Database(self.db.path)
         restarted.initialize()
         self.assertEqual(restarted.certificate_logo("gbox"), b"\xff\xd8\xffexample")
