@@ -44,15 +44,16 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
              patch.object(bot.db, "signed_certificate_app", return_value=None), \
              patch.dict("os.environ", {"RENDER_EXTERNAL_URL": "https://example.test"}):
             await experience.send_files(client, order)
-            await experience.send_app_choice(client, order)
-        self.assertEqual([item[0] for item in events], ["message", "documents", "message", "app"])
+            await experience.send_app_selector(client, order)
+        self.assertEqual([item[0] for item in events], ["message", "documents", "message", "message"])
         self.assertEqual([item.caption for item in events[1][1][1]], ["P12 · Test User", "Perfil · Test User"])
         self.assertEqual([item.media.filename for item in events[1][1][1]],
                          ["Test User.p12", "Test User.mobileprovision"])
         self.assertTrue(all(item.thumbnail for item in events[1][1][1]))
         self.assertIn("secret", events[2][1][1])
         buttons = events[3][2]["reply_markup"].inline_keyboard
-        self.assertEqual(buttons[0][0].callback_data, "certapp:sign_gbox:41")
+        self.assertEqual([button.callback_data for button in buttons[0]],
+                         ["certapp:gbox:41", "certapp:esign:41"])
         self.assertIn("/certificate/install/private", buttons[-1][0].url)
         with patch.object(bot.db, "signed_certificate_app", return_value={"version": "6.1.2"}), \
              patch.dict("os.environ", {"RENDER_EXTERNAL_URL": "https://example.test"}):
@@ -62,6 +63,13 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("👤 Nombre", bot.certificate_status_text(order))
         self.assertNotIn("▯", bot.certificate_status_text(order))
         marked.assert_called_once_with(41)
+
+    def test_emoji_ids_can_be_assigned_to_app_buttons(self):
+        with patch.object(bot, "certificate_emoji", side_effect=lambda slot: "5319007286004299794" if slot == "gbox" else None):
+            buttons = experience.app_selector_menu({"id": 41, "install_token": "private"}).inline_keyboard[0]
+        self.assertEqual(buttons[0].icon_custom_emoji_id, "5319007286004299794")
+        self.assertEqual(buttons[0].text, "GBox")
+        self.assertEqual(buttons[1].text, "🔷 ESign")
 
 
 if __name__ == "__main__":

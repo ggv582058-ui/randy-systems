@@ -21,6 +21,13 @@ class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Scarlet", names)
         self.assertNotIn("KSign", names)
 
+    def test_welcome_menu_uses_supplied_custom_emoji_ids(self):
+        with patch.object(bot.db, "private_setting", return_value=""):
+            buttons = bot.certificate_menu("es", custom_icons=True).keyboard
+        self.assertEqual(buttons[0][0].icon_custom_emoji_id, "5319007286004299794")
+        self.assertEqual(buttons[1][0].icon_custom_emoji_id, "5278343321624787703")
+        self.assertEqual(buttons[2][0].icon_custom_emoji_id, "5429571366384842791")
+
     async def test_catalog_waits_for_product_selection_before_sending_a_photo(self):
         message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
         update = SimpleNamespace(effective_user=SimpleNamespace(id=2), effective_message=message)
@@ -61,7 +68,7 @@ class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Certificado iOS", message)
         self.assertNotIn("flow", self.context.user_data)
         self.assertNotIn("certificate_pending", self.context.user_data)
-        self.assertEqual(self.reply.await_args.kwargs["reply_markup"], bot.CERTIFICATE_MENU)
+        self.assertEqual(self.reply.await_args.kwargs["reply_markup"].keyboard[0][0].text, "Welcome!")
 
     async def test_check_udid_switches_away_from_key_prompt(self):
         self.update.effective_message.text = "🔍 Check UDID"

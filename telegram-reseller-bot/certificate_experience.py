@@ -12,6 +12,7 @@ from PIL import Image, ImageOps
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument, WebAppInfo
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 
 import bot
 from app_signing import SigningError, ipa_info, sign_ipa
@@ -141,6 +142,39 @@ async def send_app_choice(tg_bot, order, kind="gbox"):
         reply_markup=app_menu(order, kind), parse_mode=ParseMode.HTML)
 
 
+def app_selector_menu(order, custom_icons=True):
+    order_id = int(order["id"])
+    base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    rows = [[InlineKeyboardButton(
+        "GBox" if custom_icons and bot.certificate_emoji("gbox") else "🟩 GBox",
+        callback_data=f"certapp:gbox:{order_id}",
+        icon_custom_emoji_id=bot.certificate_emoji("gbox") if custom_icons else None,
+        style="primary" if custom_icons else None,
+    ), InlineKeyboardButton(
+        "ESign" if custom_icons and bot.certificate_emoji("esign") else "🔷 ESign",
+        callback_data=f"certapp:esign:{order_id}",
+        icon_custom_emoji_id=bot.certificate_emoji("esign") if custom_icons else None,
+        style="primary" if custom_icons else None,
+    )]]
+    if base.startswith("https://"):
+        rows.append([InlineKeyboardButton("🌐 Mi certificado en la web",
+                                         url=f"{base}/certificate/install/{order['install_token']}")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def send_app_selector(tg_bot, order):
+    text = ("<b>Aplicaciones para tu certificado</b>\n"
+            "Elige GBox o ESign para preparar la instalación en tu dispositivo.")
+    try:
+        await tg_bot.send_message(order["user_id"], text, parse_mode=ParseMode.HTML,
+                                  reply_markup=app_selector_menu(order))
+    except BadRequest as exc:
+        if not any(word in str(exc).lower() for word in ("emoji", "button", "style")):
+            raise
+        await tg_bot.send_message(order["user_id"], text, parse_mode=ParseMode.HTML,
+                                  reply_markup=app_selector_menu(order, custom_icons=False))
+
+
 async def deliver(tg_bot, order):
     if order["status"] != "completed" or not order["download_url"]:
         return
@@ -236,20 +270,13 @@ async def certificate_callback(update, context):
         return
     if action == "choose":
         await query.answer()
-        rows = [[InlineKeyboardButton(name, callback_data=f"certapp:{key}:{order_id}")]
-                for key, name in APPS.items()]
-        if base.startswith("https://"):
-            rows.append([InlineKeyboardButton("🎬 Ver guía en video", url=f"{base}/certificate/tutorial")])
-        await query.message.reply_text(
-            "📱 <b>Elige dónde usar tu certificado</b>\n"
-            "Te mostraré los archivos y pasos para importarlo en esa app.",
-            parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
+        await send_app_selector(context.bot, order)
         return
     if action == "replay":
         await query.answer("Enviando tu certificado…")
         try:
             await send_files(context.bot, order)
-            await send_app_choice(context.bot, order)
+            await send_app_selector(context.bot, order)
         except Exception as exc:
             log.warning("No se pudo reenviar la entrega completa del pedido %s: %s", order_id, exc)
             await query.message.reply_text("No pude reenviar los archivos. Abre tu página privada para descargarlos.",
@@ -272,7 +299,7 @@ async def certificate_callback(update, context):
         await query.answer("Preparando tus archivos…")
         try:
             await send_files(context.bot, order)
-            await send_app_choice(context.bot, order)
+            await send_app_selector(context.bot, order)
         except Exception as exc:
             log.warning("Archivos no enviados en certificado %s: %s", order_id, exc)
             markup = bot.certificate_file_buttons(order)
