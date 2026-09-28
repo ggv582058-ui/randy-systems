@@ -79,7 +79,8 @@ def _components(data):
 
 def delivery_menu(order):
     order_id = int(order["id"])
-    return InlineKeyboardMarkup([[InlineKeyboardButton("Obtener certificado", callback_data=f"certapp:replay:{order_id}")]])
+    return InlineKeyboardMarkup([[bot.emoji_button("Obtener certificado", "get_certificate",
+        callback_data=f"certapp:replay:{order_id}")]])
 
 
 def app_menu(order, kind="gbox"):
@@ -88,12 +89,13 @@ def app_menu(order, kind="gbox"):
     signed = bot.db.signed_certificate_app(order_id, kind)
     rows = []
     if signed and base.startswith("https://"):
-        rows.append([InlineKeyboardButton(f"Abrir {APPS[kind]}",
+        rows.append([bot.emoji_button(f"Abrir {APPS[kind]}", f"open_{kind}",
                                          web_app=WebAppInfo(f"{base}/certificate/mini/{order['install_token']}?app={kind}"))])
     else:
-        rows.append([InlineKeyboardButton(f"Preparar {APPS[kind]}", callback_data=f"certapp:sign_{kind}:{order_id}")])
+        rows.append([bot.emoji_button(f"Preparar {APPS[kind]}", f"prepare_{kind}", callback_data=f"certapp:sign_{kind}:{order_id}")])
     if base.startswith("https://"):
-        rows.append([InlineKeyboardButton("Mi certificado en la web", url=f"{base}/certificate/install/{order['install_token']}")])
+        rows.append([bot.emoji_button("Mi certificado en la web", "web_certificate",
+                                      url=f"{base}/certificate/install/{order['install_token']}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -157,8 +159,8 @@ def app_selector_menu(order, custom_icons=True):
         style="primary" if custom_icons else None,
     )]]
     if base.startswith("https://"):
-        rows.append([InlineKeyboardButton("🌐 Mi certificado en la web",
-                                         url=f"{base}/certificate/install/{order['install_token']}")])
+        rows.append([bot.emoji_button("🌐 Mi certificado en la web", "web_certificate",
+                                      url=f"{base}/certificate/install/{order['install_token']}")])
     return InlineKeyboardMarkup(rows)
 
 

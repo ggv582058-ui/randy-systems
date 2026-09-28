@@ -176,12 +176,47 @@ EMOJI_MENU_GROUPS = {
     "certificate": ("Menú del certificado", CERTIFICATE_MENU),
 }
 
+MENU_SLOT_NAMES = {
+    "seller": (("ios", "use_key"), ("check_udid", "settings"),
+               ("buy", "balance"), ("my_keys", "lookup_key"),
+               ("account", "history"), ("support", "language")),
+    "admin": (("products", "add_keys"), ("files", "media"),
+              ("partner", "resellers"), ("topups", "announcement"),
+              ("zentry", "control_keys"), ("stats", "language")),
+    "vip": (("control_keys",), ("language",)),
+    "access": (("login", "request"), ("language",)),
+    "certificate": (("welcome",), ("ios",), ("check_udid", "use_key"), ("settings",)),
+}
+EXTRA_EMOJI_SLOTS = {
+    "get_certificate": "Obtener certificado",
+    "web_certificate": "Mi certificado en la web",
+    "prepare_gbox": "Preparar GBox",
+    "prepare_esign": "Preparar ESign",
+    "open_gbox": "Abrir GBox",
+    "open_esign": "Abrir ESign",
+    "confirm_purchase": "Confirmar compra",
+}
+
 
 def menu_slot(group: str, row: int, column: int) -> str:
-    if group == "certificate":
-        return {(0, 0): "welcome", (1, 0): "ios", (2, 0): "check_udid",
-                (2, 1): "use_key"}.get((row, column), f"certificate_{row}_{column}")
-    return f"{group}_{row}_{column}"
+    name = MENU_SLOT_NAMES[group][row][column]
+    return name if group == "certificate" and name != "settings" else f"{group}_{name}"
+
+
+def menu_button_label(slot: str) -> str:
+    for group, (group_label, markup) in EMOJI_MENU_GROUPS.items():
+        for row, buttons in enumerate(markup.keyboard):
+            for column, button in enumerate(buttons):
+                if slot == menu_slot(group, row, column):
+                    return f"{group_label} · {button.text}"
+    return EXTRA_EMOJI_SLOTS.get(slot, {"gbox": "GBox", "esign": "ESign"}.get(slot, slot))
+
+
+def emoji_button(label: str, slot: str, **kwargs) -> InlineKeyboardButton:
+    emoji_id = certificate_emoji(slot)
+    if emoji_id and re.match(r"^[^\w\s]+\s", label):
+        label = label.split(" ", 1)[1]
+    return InlineKeyboardButton(label, icon_custom_emoji_id=emoji_id, **kwargs)
 
 
 def style_menu(markup: ReplyKeyboardMarkup, group: str) -> ReplyKeyboardMarkup:
@@ -221,7 +256,7 @@ CERTIFICATE_EMOJI_DEFAULTS = {
 
 
 def certificate_emoji(slot: str) -> str | None:
-    if slot not in CERTIFICATE_EMOJI_DEFAULTS and not any(
+    if slot not in CERTIFICATE_EMOJI_DEFAULTS and slot not in EXTRA_EMOJI_SLOTS and not any(
         slot == menu_slot(group, row, column)
         for group, (_, markup) in EMOJI_MENU_GROUPS.items()
         for row, buttons in enumerate(markup.keyboard)
@@ -230,6 +265,12 @@ def certificate_emoji(slot: str) -> str | None:
         return None
     try:
         value = db.private_setting(f"certemoji:{slot}")
+        if not value:
+            for group, (_, markup) in EMOJI_MENU_GROUPS.items():
+                for row, buttons in enumerate(markup.keyboard):
+                    for column, _ in enumerate(buttons):
+                        if slot == menu_slot(group, row, column) and slot not in CERTIFICATE_EMOJI_DEFAULTS:
+                            value = db.private_setting(f"certemoji:{group}_{row}_{column}")
     except sqlite3.OperationalError:
         value = ""
     return None if value == "-" else value or CERTIFICATE_EMOJI_DEFAULTS.get(slot) or None
@@ -244,9 +285,18 @@ def certificate_menu(language: str, custom_icons: bool = False):
         [KeyboardButton(ios, icon_custom_emoji_id=certificate_emoji("ios"))],
         [KeyboardButton("Check UDID", icon_custom_emoji_id=certificate_emoji("check_udid")),
          KeyboardButton("Use Key", icon_custom_emoji_id=certificate_emoji("use_key"))],
-        [KeyboardButton("Settings" if certificate_emoji("certificate_3_0") else "⚙️ Settings",
-                        icon_custom_emoji_id=certificate_emoji("certificate_3_0"))],
+        [KeyboardButton("Settings" if certificate_emoji("certificate_settings") else "⚙️ Settings",
+                        icon_custom_emoji_id=certificate_emoji("certificate_settings"))],
     ], resize_keyboard=True)
+
+
+async def reply_certificate_menu(message, text: str, language: str, **kwargs):
+    try:
+        return await message.reply_text(text, reply_markup=certificate_menu(language, custom_icons=True), **kwargs)
+    except BadRequest as exc:
+        if not any(part in str(exc).lower() for part in ("emoji", "button", "icon")):
+            raise
+        return await message.reply_text(text, reply_markup=certificate_menu(language), **kwargs)
 
 
 def pending_menu(language: str):
@@ -671,9 +721,8 @@ async def begin_certificate_key(update: Update, context: ContextTypes.DEFAULT_TY
         await ask_certificate_device(update.effective_message)
         return
     context.user_data["flow"] = {"name": "certificate_key"}
-    await update.effective_message.reply_text(
-        "🔑 Envía tu key de certificado:", reply_markup=certificate_menu(language_of(current_user(update)))
-    )
+    await reply_certificate_menu(update.effective_message, "🔑 Envía tu key de certificado:",
+                                 language_of(current_user(update)))
 
 
 async def ask_certificate_device(message) -> None:
@@ -690,9 +739,8 @@ async def ask_certificate_device(message) -> None:
 
 async def begin_udid_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["flow"] = {"name": "certificate_lookup_udid"}
-    await update.effective_message.reply_text(
-        "🔍 Envía el UDID que deseas consultar:", reply_markup=certificate_menu(language_of(current_user(update)))
-    )
+    await reply_certificate_menu(update.effective_message, "🔍 Envía el UDID que deseas consultar:",
+                                 language_of(current_user(update)))
 
 
 async def show_certificate_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, language: str) -> None:
@@ -1282,10 +1330,8 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         rows = db.certificate_orders_for_user(message.from_user.id, text.upper())
         context.user_data.pop("flow", None)
         if not rows:
-            await message.reply_text(
-                "🔍 No encontré certificados tuyos para ese UDID.",
-                reply_markup=certificate_menu(language_of(current_user(update))),
-            )
+            await reply_certificate_menu(message, "🔍 No encontré certificados tuyos para ese UDID.",
+                                         language_of(current_user(update)))
             return True
         for index, row in enumerate(rows[:5]):
             row = db.renew_certificate_link(row["id"], message.from_user.id, settings.certificate_link_ttl_hours)
@@ -1573,7 +1619,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         if value.lower() in ("borrar", "quitar", "remove"):
             db.set_private_setting(f"certemoji:{slot}", "-")
             context.user_data.pop("flow", None)
-            await message.reply_text(f"✅ Icono de {slot} desactivado. Se usará el emoji normal.", reply_markup=style_menu(ADMIN_MENU, "admin"))
+            await message.reply_text(f"✅ Icono de {menu_button_label(slot)} quitado.", reply_markup=style_menu(ADMIN_MENU, "admin"))
             return True
         if not emoji_id:
             await message.reply_text("Envía un emoji Premium como mensaje, pega su ID numérico, o escribe borrar.")
@@ -1593,7 +1639,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 f"✅ Guardado para <b>{html.escape(flow.get('label', slot))}</b>. Vista previa abajo. Abre /start para ver el menú actualizado.",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-                    "Vista previa · editar emojis", callback_data="certemoji:menu",
+                    flow.get("label", slot)[:50], callback_data="certemoji:menu",
                     icon_custom_emoji_id=emoji_id)]]))
         except BadRequest as exc:
             db.set_private_setting(f"certemoji:{slot}", "-")
@@ -1967,12 +2013,12 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.message.reply_text(f"❌ {html.escape(str(exc))}", parse_mode=ParseMode.HTML)
             return
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text(
+        await reply_certificate_menu(query.message,
             "🎉 <b>PAGO CONFIRMADO</b>\n━━━━━━━━━━━━━━━━━━\n"
             f"🔑 Key: <code>{issued['key_code']}</code>\n"
             f"💰 Saldo restante: <b>{money(issued['balance_cents'])}</b>\n\n"
             "La key se activó para iniciar tu certificado.",
-            reply_markup=certificate_menu(language_of(user)),
+            language_of(user),
             parse_mode=ParseMode.HTML,
         )
         context.user_data["flow"] = {"name": "certificate_udid", "certificate_key": issued["key_code"]}
@@ -2187,11 +2233,19 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     [InlineKeyboardButton(label, callback_data=f"certemoji:group:{group}")]
                     for group, (label, _) in EMOJI_MENU_GROUPS.items()
                 ] + [
+                    [InlineKeyboardButton("Entrega, instalación y compra", callback_data="certemoji:group:actions")],
                     [InlineKeyboardButton("GBox", callback_data="certemoji:set:gbox"),
                      InlineKeyboardButton("ESign", callback_data="certemoji:set:esign")],
                 ]))
         elif data.startswith("certemoji:group:"):
             group = data.rsplit(":", 1)[-1]
+            if group == "actions":
+                await query.message.reply_text("Elige un botón de la entrega o compra:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton(label, callback_data=f"certemoji:set:{slot}")]
+                        for slot, label in EXTRA_EMOJI_SLOTS.items()
+                    ]))
+                return
             if group not in EMOJI_MENU_GROUPS:
                 return
             _, markup = EMOJI_MENU_GROUPS[group]
@@ -2204,15 +2258,16 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                                            reply_markup=InlineKeyboardMarkup(buttons))
         else:
             slot = data.rsplit(":", 1)[-1]
-            if slot not in CERTIFICATE_EMOJI_DEFAULTS and certificate_emoji(slot) is None and not any(
+            if slot not in CERTIFICATE_EMOJI_DEFAULTS and slot not in EXTRA_EMOJI_SLOTS and certificate_emoji(slot) is None and not any(
                 slot == menu_slot(group, row, column)
                 for group, (_, markup) in EMOJI_MENU_GROUPS.items()
                 for row, buttons in enumerate(markup.keyboard)
                 for column, _ in enumerate(buttons)
             ):
                 return
-            context.user_data["flow"] = {"name": "certificate_emoji_assign", "slot": slot, "label": slot}
-            await query.message.reply_text(f"Envía el emoji para <b>{html.escape(slot)}</b>, su ID, o escribe borrar.",
+            label = menu_button_label(slot)
+            context.user_data["flow"] = {"name": "certificate_emoji_assign", "slot": slot, "label": label}
+            await query.message.reply_text(f"Envía el emoji para <b>{html.escape(label)}</b>, su ID, o escribe borrar.",
                                            parse_mode=ParseMode.HTML)
         return
 
@@ -2532,7 +2587,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         await query.answer()
         keys = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Confirmar compra", callback_data=f"confirm:{product_id}"),
+            emoji_button("✅ Confirmar compra", "confirm_purchase", callback_data=f"confirm:{product_id}"),
             InlineKeyboardButton("❌ Cancelar", callback_data="cancel"),
         ]])
         caption = (

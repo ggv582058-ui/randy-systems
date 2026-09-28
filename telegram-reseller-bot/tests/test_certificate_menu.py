@@ -39,6 +39,21 @@ class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.menu_slot("certificate", 0, 0), "welcome")
         self.assertEqual(bot.menu_slot("certificate", 2, 1), "use_key")
 
+    def test_menu_slots_follow_actions_and_keep_saved_legacy_ids(self):
+        self.assertEqual(bot.menu_slot("seller", 0, 0), "seller_ios")
+        self.assertEqual(bot.menu_slot("seller", 5, 1), "seller_language")
+        with patch.object(bot.db, "private_setting", side_effect=lambda key: "1234567890123456789" if key == "certemoji:seller_0_0" else ""):
+            self.assertEqual(bot.user_menu("es").keyboard[0][0].icon_custom_emoji_id, "1234567890123456789")
+        with patch.object(bot.db, "private_setting", side_effect=lambda key: "2222222222222222222" if key == "certemoji:seller_ios" else ""):
+            self.assertEqual(bot.user_menu("en").keyboard[0][0].icon_custom_emoji_id, "2222222222222222222")
+
+    def test_certificate_actions_have_distinct_editable_icons(self):
+        with patch.object(bot.db, "private_setting", side_effect=lambda key: "2222222222222222222" if key == "certemoji:get_certificate" else ""):
+            button = certificate_experience.delivery_menu({"id": 7}).inline_keyboard[0][0]
+        self.assertEqual(button.text, "Obtener certificado")
+        self.assertEqual(button.icon_custom_emoji_id, "2222222222222222222")
+        self.assertEqual(bot.menu_button_label("admin_media"), "Menú de administración · 🎨 Multimedia")
+
     async def test_catalog_waits_for_product_selection_before_sending_a_photo(self):
         message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
         update = SimpleNamespace(effective_user=SimpleNamespace(id=2), effective_message=message)
