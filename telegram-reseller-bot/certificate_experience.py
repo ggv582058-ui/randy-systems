@@ -15,18 +15,18 @@ from telegram.constants import ParseMode
 
 import bot
 from app_signing import SigningError, ipa_info, sign_ipa
-from certificate_card import app_tile
+from certificate_card import app_tile, file_icon
 
 log = bot.log
 APPS = {"gbox": "GBox", "esign": "ESign"}
 STATUS_ICONS = (
-    ("✓ Estado:", "5931409969613116639", "✅ Estado:"),
-    ("◈ Nombre:", "5942826671290715541", "👤 Nombre:"),
-    ("⌗ UDID:", "5877540355187937244", "🆔 UDID:"),
-    ("▣ Registrado:", "5967782394080530708", "📅 Registrado:"),
-    ("◷ Garantía estimada:", "5778139491810155937", "🛡️ Garantía estimada:"),
+    ("✅ Estado:", "5931409969613116639", "✅ Estado:"),
+    ("👤 Nombre:", "5942826671290715541", "👤 Nombre:"),
+    ("🆔 UDID:", "5877540355187937244", "🆔 UDID:"),
+    ("📅 Registrado:", "5967782394080530708", "📅 Registrado:"),
+    ("🛡️ Garantía estimada:", "5778139491810155937", "🛡️ Garantía estimada:"),
     ("⚡ Plan:", "5278343321624787703", "⚡ Plan:"),
-    ("▯ Equipo:", "5776375003280838798", "📱 Equipo:"),
+    ("📱 Equipo:", "5776375003280838798", "📱 Equipo:"),
 )
 _busy = set()
 _retry_after = {}
@@ -46,7 +46,7 @@ async def send_status(tg_bot, order, reply_markup=None):
     try:
         await tg_bot.send_message(order["user_id"], decorated, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     except Exception as exc:
-        if decorated == plain or "emoji" not in str(exc).lower():
+        if decorated == plain or not any(word in str(exc).lower() for word in ("emoji", "entity", "parse")):
             raise
         await tg_bot.send_message(order["user_id"], plain, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
@@ -86,11 +86,12 @@ def app_menu(order, kind="gbox"):
     order_id = int(order["id"])
     signed = bot.db.signed_certificate_app(order_id, kind)
     rows = []
-    if not signed:
-        rows.append([InlineKeyboardButton(f"Preparar {APPS[kind]}", callback_data=f"certapp:sign_{kind}:{order_id}")])
-    if base.startswith("https://"):
+    if signed and base.startswith("https://"):
         rows.append([InlineKeyboardButton(f"Abrir {APPS[kind]}",
                                          web_app=WebAppInfo(f"{base}/certificate/mini/{order['install_token']}?app={kind}"))])
+    else:
+        rows.append([InlineKeyboardButton(f"Preparar {APPS[kind]}", callback_data=f"certapp:sign_{kind}:{order_id}")])
+    if base.startswith("https://"):
         rows.append([InlineKeyboardButton("Mi certificado en la web", url=f"{base}/certificate/install/{order['install_token']}")])
     return InlineKeyboardMarkup(rows)
 
@@ -103,11 +104,12 @@ async def send_files(tg_bot, order):
     if not p12 or not mobile:
         raise ValueError("El proveedor todavía no entregó P12 y MobileProvision")
     documents = []
-    for kind, component, caption in (("p12", p12, "Certificado P12"),
-                                     ("mobileprovision", mobile, "MobileProvision")):
+    client_name = bot.safe_certificate_name(str(order["display_name"] or "Certificado")) or "Certificado"
+    for kind, component, caption in (("p12", p12, f"P12 · {client_name}"),
+                                     ("mobileprovision", mobile, f"Perfil · {client_name}")):
         stream = io.BytesIO(component[1])
-        stream.name = component[0]
-        logo = bot.db.certificate_logo(kind)
+        stream.name = f"{client_name}.{'p12' if kind == 'p12' else 'mobileprovision'}"
+        logo = bot.db.certificate_logo(kind) or file_icon(kind)
         thumbnail = None
         if logo:
             try:
@@ -131,8 +133,11 @@ async def send_app_choice(tg_bot, order, kind="gbox"):
     name = APPS[kind]
     picture = io.BytesIO(app_tile(bot.db.certificate_logo(kind), name))
     picture.name = f"{kind}-app.jpg"
+    signed = bot.db.signed_certificate_app(int(order["id"]), kind)
+    instruction = ("Tu app ya está firmada. Toca Abrir para seguir con la instalación."
+                   if signed else f"Toca Preparar {name}; después aparecerá Abrir {name}.")
     await tg_bot.send_photo(order["user_id"], picture,
-        caption=f"<b>{name}</b> · Abre tu instalación privada. Si todavía no está firmada, toca Preparar {name}.",
+        caption=f"<b>{name}</b> · {instruction}",
         reply_markup=app_menu(order, kind), parse_mode=ParseMode.HTML)
 
 
@@ -155,6 +160,7 @@ async def deliver(tg_bot, order):
 
 
 bot.deliver_certificate = deliver
+bot.send_certificate_status = send_status
 _original_callback = bot.callback
 
 
@@ -213,7 +219,7 @@ async def certificate_callback(update, context):
             await asyncio.to_thread(bot.db.set_signed_certificate_app, order_id, kind, signed, bundle_id, version)
             await status_message.edit_text(
                 f"✅ <b>{APPS[kind]} v{html.escape(version)} lista para instalar</b>\n"
-                "Abre GBox desde Telegram; si iOS lo solicita, continúa en Safari.",
+                f"Abre {APPS[kind]} desde Telegram; si iOS lo solicita, continúa en Safari.",
                 parse_mode=ParseMode.HTML,
                 reply_markup=app_menu(order, kind))
             try:

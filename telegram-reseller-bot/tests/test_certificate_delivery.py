@@ -46,12 +46,21 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
             await experience.send_files(client, order)
             await experience.send_app_choice(client, order)
         self.assertEqual([item[0] for item in events], ["message", "documents", "message", "app"])
-        self.assertEqual([item.caption for item in events[1][1][1]], ["Certificado P12", "MobileProvision"])
+        self.assertEqual([item.caption for item in events[1][1][1]], ["P12 · Test User", "Perfil · Test User"])
+        self.assertEqual([item.media.filename for item in events[1][1][1]],
+                         ["Test User.p12", "Test User.mobileprovision"])
+        self.assertTrue(all(item.thumbnail for item in events[1][1][1]))
         self.assertIn("secret", events[2][1][1])
         buttons = events[3][2]["reply_markup"].inline_keyboard
         self.assertEqual(buttons[0][0].callback_data, "certapp:sign_gbox:41")
-        self.assertIn("/certificate/mini/private?app=gbox", buttons[1][0].web_app.url)
         self.assertIn("/certificate/install/private", buttons[-1][0].url)
+        with patch.object(bot.db, "signed_certificate_app", return_value={"version": "6.1.2"}), \
+             patch.dict("os.environ", {"RENDER_EXTERNAL_URL": "https://example.test"}):
+            signed_buttons = experience.app_menu(order).inline_keyboard
+        self.assertIn("/certificate/mini/private?app=gbox", signed_buttons[0][0].web_app.url)
+        self.assertIn("✅ Estado", bot.certificate_status_text(order))
+        self.assertIn("👤 Nombre", bot.certificate_status_text(order))
+        self.assertNotIn("▯", bot.certificate_status_text(order))
         marked.assert_called_once_with(41)
 
 

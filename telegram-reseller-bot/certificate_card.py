@@ -19,6 +19,25 @@ def _short(value, limit=28):
     return value if len(value) <= limit else value[:limit - 1] + "…"
 
 
+def file_icon(kind: str) -> bytes:
+    """Bundled thumbnail for a P12 or provisioning document in Telegram."""
+    green = kind == "p12"
+    picture = Image.new("RGB", (320, 320), "#0a241d" if green else "#101e37")
+    draw = ImageDraw.Draw(picture)
+    accent = "#45e0a0" if green else "#75afff"
+    fill = "#14523d" if green else "#1c416d"
+    draw.rounded_rectangle((27, 27, 293, 293), radius=61, fill=fill, outline=accent, width=5)
+    draw.rounded_rectangle((79, 59, 241, 254), radius=21, fill="#effff7" if green else "#eff6ff")
+    draw.polygon(((200, 59), (241, 100), (200, 100)), fill="#a4d9bf" if green else "#a7c5ed")
+    draw.line((106, 130, 211, 130), fill=fill, width=8)
+    draw.line((106, 153, 193, 153), fill=fill, width=8)
+    draw.rounded_rectangle((90, 178, 230, 230), radius=13, fill="#087b51" if green else "#2e6cb5")
+    draw.text((160, 204), "P12" if green else "PROFILE", anchor="mm", font=_font(27 if green else 17, True), fill="white")
+    output = io.BytesIO()
+    picture.save(output, format="JPEG", quality=91, optimize=True)
+    return output.getvalue()
+
+
 def certificate_card(order, logo: bytes | None = None, app: str | None = None) -> bytes:
     """Return a small JPEG that fits naturally inside a Telegram photo message."""
     width, height = 960, 650

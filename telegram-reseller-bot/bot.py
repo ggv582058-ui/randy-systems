@@ -654,13 +654,13 @@ def certificate_status_text(order) -> str:
         device = "iPhone" if order["device"] == "iphone" else "iPad" if order["device"] == "ipad" else str(order["device"] or "iPhone")
         return (
             "<b>RANDY MOD  /  TU CERTIFICADO</b>\n\n"
-            "✓ Estado: <b>Firmado</b>\n"
-            f"◈ Nombre: <b>{html.escape(str(order['display_name'] or 'Certificado'))}</b>\n"
-            f"⌗ UDID: <code>{html.escape(str(order['udid']))}</code>\n"
-            f"▣ Registrado: <b>{html.escape(registered)}</b>\n"
-            f"◷ Garantía estimada: <b>{html.escape(HealthHandler._warranty(order))}</b>\n"
+            "✅ Estado: <b>Firmado</b>\n"
+            f"👤 Nombre: <b>{html.escape(str(order['display_name'] or 'Certificado'))}</b>\n"
+            f"🆔 UDID: <code>{html.escape(str(order['udid']))}</code>\n"
+            f"📅 Registrado: <b>{html.escape(registered)}</b>\n"
+            f"🛡️ Garantía estimada: <b>{html.escape(HealthHandler._warranty(order))}</b>\n"
             f"⚡ Plan: <b>#{html.escape(str(order['plan_id']))}</b>\n"
-            f"▯ Equipo: <b>{html.escape(device)}</b>"
+            f"📱 Equipo: <b>{html.escape(device)}</b>"
         )
     return (
         "🍎 <b>RANDY MOD · TU CERTIFICADO</b>\n━━━━━━━━━━━━━━━━━━\n"
@@ -1209,6 +1209,8 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 picture.name = "randy-certificate.jpg"
                 await message.reply_photo(picture, caption=certificate_status_text(row),
                                           reply_markup=buttons, parse_mode=ParseMode.HTML)
+            elif row["status"] == "completed" and callable(globals().get("send_certificate_status")):
+                await send_certificate_status(context.bot, row, reply_markup=buttons)
             else:
                 await message.reply_text(certificate_status_text(row), reply_markup=buttons, parse_mode=ParseMode.HTML)
         return True
