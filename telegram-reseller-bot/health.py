@@ -85,6 +85,10 @@ class HealthHandler(BaseHTTPRequestHandler):
             focus = parse_qs(urlsplit(self.path).query).get("app", ["gbox"])[0]
             self._certificate_mini(path.rsplit("/", 1)[-1], focus)
             return
+        if path.startswith("/certificate/launch/"):
+            focus = parse_qs(urlsplit(self.path).query).get("app", ["gbox"])[0]
+            self._certificate_launch(path.rsplit("/", 1)[-1], focus)
+            return
         if path.startswith("/certificate/cover/"):
             self._certificate_cover(path.rsplit("/", 1)[-1])
             return
@@ -153,14 +157,10 @@ class HealthHandler(BaseHTTPRequestHandler):
         base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
         safe_token = html.escape(token, quote=True)
         name = "GBox" if kind == "gbox" else "ESign"
-        manifest = f"{base}/certificate/manifest/{safe_token}/{kind}.plist"
-        install_url = html.escape("itms-services://?action=download-manifest&url=" + quote(manifest, safe=""), quote=True)
-        page_url = f"{base}/certificate/install/{safe_token}?app={kind}"
-        main_button = (f'<a class="install" href="{install_url}">Instalar {name} <span>↗</span></a>'
+        launch_url = f"{base}/certificate/launch/{safe_token}?app={kind}"
+        main_button = (f'<button id="install" class="install" type="button">Continuar a Safari <span>↗</span></button>'
                        if signed and base.startswith("https://") else
                        '<div class="waiting">La firma de la app aún no está lista. Vuelve al bot y toca <b>Preparar GBox</b>.</div>')
-        safari = (f'<button id="safari" class="safari" type="button">Abrir instalación en Safari ↗</button>'
-                  if signed else '')
         body = f'''<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#061a12"><title>{name} · Randy Mod</title>
@@ -174,19 +174,47 @@ h1{{font-size:37px;margin:10px 0 2px;letter-spacing:-1px}}.version{{font-size:13
 </style></head><body><main><div class="brand">RANDY MOD / INSTALACIÓN PRIVADA</div>
 <div class="orb"><img src="/certificate/logo/{safe_token}/{kind}" alt="Logo {name}"></div>
 <h1>{name}</h1><div class="version">App privada para tu certificado</div>
-<p class="hint">Tu certificado ya está en Telegram. Instala la app firmada para tu dispositivo y después importa los archivos P12 y MobileProvision.</p>
-{main_button}{safari}
+<p class="hint">Tu certificado ya está en Telegram. Abre la instalación en Safari y después importa los archivos P12 y MobileProvision en {name}.</p>
+{main_button}
 <div class="video-title">GUÍA RÁPIDA</div><video controls playsinline preload="metadata" poster="/certificate/cover/{safe_token}"><source src="/certificate/tutorial" type="video/mp4">Tu navegador no admite video.</video>
 <a class="web" href="/certificate/install/{safe_token}?app={kind}">Ver mi certificado en la web ↗</a>
-<div class="foot">Enlace privado. Si iOS no abre la instalación desde Telegram, toca «Abrir instalación en Safari».</div>
+<div class="foot">Enlace privado. iPhone requiere confirmar la instalación desde Safari. La miniapp mantiene aquí tu video y tu certificado.</div>
 </main><script>
 const app=window.Telegram?.WebApp;app?.ready();app?.expand();
-document.getElementById('safari')?.addEventListener('click',()=>{{const link={json.dumps(page_url)};if(app?.openLink)app.openLink(link,{{try_instant_view:false}});else window.open(link,'_blank');}});
+document.getElementById('install')?.addEventListener('click',()=>{{const link={json.dumps(launch_url)};if(app?.openLink)app.openLink(link,{{try_instant_view:false}});else window.open(link,'_blank');}});
 </script></body></html>'''.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "private, no-store")
         self.send_header("Content-Security-Policy", "default-src 'self' https://telegram.org data:; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://telegram.org; img-src 'self' data:; media-src 'self'")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _certificate_launch(self, token: str, kind: str) -> None:
+        if kind not in ("gbox", "esign"):
+            self.send_error(404)
+            return
+        server: BotHTTPServer = self.server
+        order = server.certificate_lookup(token) if server.certificate_lookup else None
+        if not order or order["status"] != "completed" or not server.certificate_signed_lookup or not server.certificate_signed_lookup(order["id"], kind):
+            self.send_error(404, "App firmada no disponible o enlace vencido")
+            return
+        base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+        if not base.startswith("https://"):
+            self.send_error(503, "HTTPS no configurado")
+            return
+        safe_token = html.escape(token, quote=True)
+        name = "GBox" if kind == "gbox" else "ESign"
+        manifest = f"{base}/certificate/manifest/{token}/{kind}.plist"
+        install_url = html.escape("itms-services://?action=download-manifest&url=" + quote(manifest, safe=""), quote=True)
+        body = f'''<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#082318"><title>Instalar {name} · Randy Mod</title><style>
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,#1886537a,transparent 50%),#06150e;color:#f0fff4;font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}main{{max-width:420px;margin:auto;min-height:100vh;padding:44px 22px;text-align:center}}.brand{{letter-spacing:3px;color:#9be5b7;font-size:12px;font-weight:800}}img{{width:130px;height:130px;object-fit:cover;border-radius:32px;margin:62px auto 16px;box-shadow:0 0 0 15px #2bec901a,0 22px 70px #21dd8055}}h1{{font-size:35px;margin:15px 0 8px}}p{{color:#b9d7c5;line-height:1.5}}.button{{display:block;background:#33da8c;color:#08301e;text-decoration:none;border-radius:17px;padding:20px;margin:32px 0 16px;font-size:19px;font-weight:800}}.note{{border:1px solid #38845b;border-radius:17px;background:#123224;padding:18px;text-align:left;font-size:14px;line-height:1.6}}.secondary{{color:#a6dabb;font-size:13px}}
+</style></head><body><main><div class="brand">RANDY MOD / INSTALACIÓN PRIVADA</div><img src="/certificate/logo/{safe_token}/{kind}" alt="{name}"><h1>{name}</h1><p>Aplicación firmada para tu certificado. Toca instalar y confirma el aviso de iOS.</p><a class="button" href="{install_url}">Instalar {name} ↗</a><div class="note">Si no aparece el aviso, abre esta página en <b>Safari</b> con el menú Compartir y toca «Instalar {name}» otra vez. El certificado debe seguir vigente y pertenecer a este iPhone o iPad.</div><p class="secondary">El enlace y la IPA son privados para este pedido.</p></main></body></html>'''.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "private, no-store")
+        self.send_header("Content-Security-Policy", "default-src 'self' data:; style-src 'unsafe-inline'; img-src 'self' data:")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

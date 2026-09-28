@@ -64,13 +64,19 @@ class InstallManifestTests(unittest.TestCase):
         with patch.dict(os.environ, {"RENDER_EXTERNAL_URL": "https://example.test"}):
             with urlopen(self.base + "/certificate/mini/private?app=esign") as response:
                 page = response.read().decode()
-            self.assertIn('Instalar ESign', page)
-            self.assertIn('itms-services://', page)
+            self.assertIn('Continuar a Safari', page)
+            self.assertIn('/certificate/launch/private?app=esign', page)
+            self.assertNotIn('itms-services://', page)
             self.assertIn('/certificate/logo/private/esign', page)
+            with urlopen(self.base + "/certificate/launch/private?app=esign") as response:
+                launch = response.read().decode()
+            self.assertIn('Instalar ESign', launch)
+            self.assertIn('itms-services://', launch)
             with urlopen(self.base + "/certificate/mini/private?app=gbox") as response:
                 waiting = response.read().decode()
             self.assertNotIn('itms-services://', waiting)
-            for url in ("/certificate/mini/other", "/certificate/mini/private?app=scarlet"):
+            for url in ("/certificate/mini/other", "/certificate/mini/private?app=scarlet",
+                        "/certificate/launch/private?app=gbox", "/certificate/launch/other?app=esign"):
                 with self.assertRaises(HTTPError) as failure:
                     urlopen(self.base + url)
                 self.assertEqual(failure.exception.code, 404)
