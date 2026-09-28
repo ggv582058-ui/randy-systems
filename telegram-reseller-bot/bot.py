@@ -187,6 +187,40 @@ MENU_SLOT_NAMES = {
     "access": (("login", "request"), ("language",)),
     "certificate": (("welcome",), ("ios",), ("check_udid", "use_key"), ("settings",)),
 }
+MENU_ACTION_LABELS = {
+    "Welcome!": "welcome", "Certificado iOS": "ios", "iOS Certificate": "ios",
+    "Use Key": "use_key", "Check UDID": "check_udid",
+    "Tu certificado": "my_certificate", "My certificate": "my_certificate",
+    "Settings": "settings", "Comprar keys": "buy", "Buy keys": "buy",
+    "Recargar saldo": "balance", "Add balance": "balance",
+    "Mis keys": "my_keys", "My keys": "my_keys",
+    "Consultar key": "lookup_key", "Check key": "lookup_key",
+    "Mi cuenta": "account", "My account": "account",
+    "Historial": "history", "History": "history",
+    "Soporte": "support", "Support": "support",
+    "Idioma / Language": "language", "Language / Idioma": "language",
+    "Productos": "products", "Products": "products",
+    "Añadir keys": "add_keys", "Add keys": "add_keys",
+    "Archivos": "files", "Files": "files", "Multimedia": "media", "Media": "media",
+    "Crear socio": "partner", "Create partner": "partner",
+    "Revendedores": "resellers", "Resellers": "resellers",
+    "Recargas": "topups", "Top-ups": "topups",
+    "Anuncio global": "announcement", "Global announcement": "announcement",
+    "API Zentry": "zentry", "Zentry API": "zentry",
+    "Control keys": "control_keys", "Key control": "control_keys",
+    "Estadísticas": "stats", "Statistics": "stats",
+    "Iniciar sesión": "login", "Sign in": "login",
+    "Solicitar acceso": "request", "Request access": "request",
+}
+
+
+def current_group_markup(group: str):
+    return {"seller": USER_MENU, "admin": ADMIN_MENU, "vip": VIP_ADMIN_MENU,
+            "access": PENDING_MENU, "certificate": CERTIFICATE_MENU}[group]
+
+
+def plain_button_label(label: str) -> str:
+    return label.split(" ", 1)[-1] if " " in label else label
 EXTRA_EMOJI_SLOTS = {
     "get_certificate": "Obtener certificado",
     "web_certificate": "Mi certificado en la web",
@@ -199,12 +233,16 @@ EXTRA_EMOJI_SLOTS = {
 
 
 def menu_slot(group: str, row: int, column: int) -> str:
-    name = MENU_SLOT_NAMES[group][row][column]
+    label = current_group_markup(group).keyboard[row][column].text
+    name = MENU_ACTION_LABELS.get(plain_button_label(label))
+    if not name:
+        raise ValueError(f"No hay ID de menú para {group}: {label}")
     return name if group == "certificate" and name != "settings" else f"{group}_{name}"
 
 
 def menu_button_label(slot: str) -> str:
-    for group, (group_label, markup) in EMOJI_MENU_GROUPS.items():
+    for group, (group_label, _) in EMOJI_MENU_GROUPS.items():
+        markup = current_group_markup(group)
         for row, buttons in enumerate(markup.keyboard):
             for column, button in enumerate(buttons):
                 if slot == menu_slot(group, row, column):
@@ -232,7 +270,8 @@ def style_menu(markup: ReplyKeyboardMarkup, group: str) -> ReplyKeyboardMarkup:
 
 
 def canonical_menu_text(value: str) -> str:
-    for _, markup in EMOJI_MENU_GROUPS.values():
+    for group in EMOJI_MENU_GROUPS:
+        markup = current_group_markup(group)
         for row in markup.keyboard:
             for button in row:
                 if value == button.text.split(" ", 1)[-1]:
@@ -258,7 +297,8 @@ CERTIFICATE_EMOJI_DEFAULTS = {
 def certificate_emoji(slot: str) -> str | None:
     if slot not in CERTIFICATE_EMOJI_DEFAULTS and slot not in EXTRA_EMOJI_SLOTS and not any(
         slot == menu_slot(group, row, column)
-        for group, (_, markup) in EMOJI_MENU_GROUPS.items()
+        for group in EMOJI_MENU_GROUPS
+        for markup in (current_group_markup(group),)
         for row, buttons in enumerate(markup.keyboard)
         for column, _ in enumerate(buttons)
     ):
@@ -269,7 +309,9 @@ def certificate_emoji(slot: str) -> str | None:
             for group, (_, markup) in EMOJI_MENU_GROUPS.items():
                 for row, buttons in enumerate(markup.keyboard):
                     for column, _ in enumerate(buttons):
-                        if slot == menu_slot(group, row, column) and slot not in CERTIFICATE_EMOJI_DEFAULTS:
+                        old_name = MENU_SLOT_NAMES[group][row][column]
+                        old_slot = old_name if group == "certificate" and old_name != "settings" else f"{group}_{old_name}"
+                        if slot == old_slot and slot not in CERTIFICATE_EMOJI_DEFAULTS:
                             value = db.private_setting(f"certemoji:{group}_{row}_{column}")
     except sqlite3.OperationalError:
         value = ""
@@ -279,15 +321,7 @@ def certificate_emoji(slot: str) -> str | None:
 def certificate_menu(language: str, custom_icons: bool = False):
     if not custom_icons:
         return CERTIFICATE_MENU_EN if language == "en" else CERTIFICATE_MENU
-    ios = "iOS Certificate" if language == "en" else "Certificado iOS"
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("Welcome!", icon_custom_emoji_id=certificate_emoji("welcome"))],
-        [KeyboardButton(ios, icon_custom_emoji_id=certificate_emoji("ios"))],
-        [KeyboardButton("Check UDID", icon_custom_emoji_id=certificate_emoji("check_udid")),
-         KeyboardButton("Use Key", icon_custom_emoji_id=certificate_emoji("use_key"))],
-        [KeyboardButton("Settings" if certificate_emoji("certificate_settings") else "⚙️ Settings",
-                        icon_custom_emoji_id=certificate_emoji("certificate_settings"))],
-    ], resize_keyboard=True)
+    return style_menu(CERTIFICATE_MENU_EN if language == "en" else CERTIFICATE_MENU, "certificate")
 
 
 async def reply_certificate_menu(message, text: str, language: str, **kwargs):
@@ -2248,7 +2282,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 return
             if group not in EMOJI_MENU_GROUPS:
                 return
-            _, markup = EMOJI_MENU_GROUPS[group]
+            markup = current_group_markup(group)
             buttons = []
             for row_number, row in enumerate(markup.keyboard):
                 for column, button in enumerate(row):
@@ -2260,7 +2294,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             slot = data.rsplit(":", 1)[-1]
             if slot not in CERTIFICATE_EMOJI_DEFAULTS and slot not in EXTRA_EMOJI_SLOTS and certificate_emoji(slot) is None and not any(
                 slot == menu_slot(group, row, column)
-                for group, (_, markup) in EMOJI_MENU_GROUPS.items()
+                for group in EMOJI_MENU_GROUPS
+                for markup in (current_group_markup(group),)
                 for row, buttons in enumerate(markup.keyboard)
                 for column, _ in enumerate(buttons)
             ):

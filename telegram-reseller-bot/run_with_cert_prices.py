@@ -297,7 +297,7 @@ async def handle_flow(update, context):
 
 async def handle_text_menu(update, context):
     if bot.panel(context) != "admin":
-        text = (update.effective_message.text or "").strip()
+        text = bot.canonical_menu_text((update.effective_message.text or "").strip())
         user = bot.current_user(update)
         if user and user["role"] in ("reseller", "admin") and text in (
             "💠 Tu certificado", "💠 My certificate"

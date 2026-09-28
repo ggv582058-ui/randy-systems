@@ -9,6 +9,7 @@ os.environ.setdefault("ADMIN_IDS", "1")
 
 import bot
 import certificate_experience
+from telegram import KeyboardButton, ReplyKeyboardMarkup
 
 
 class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
@@ -46,6 +47,18 @@ class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(bot.user_menu("es").keyboard[0][0].icon_custom_emoji_id, "1234567890123456789")
         with patch.object(bot.db, "private_setting", side_effect=lambda key: "2222222222222222222" if key == "certemoji:seller_ios" else ""):
             self.assertEqual(bot.user_menu("en").keyboard[0][0].icon_custom_emoji_id, "2222222222222222222")
+
+    def test_extended_production_menu_can_render_start_and_edit_my_certificate(self):
+        extended = ReplyKeyboardMarkup([
+            [KeyboardButton("🍎 Certificado iOS"), KeyboardButton("🔑 Use Key")],
+            [KeyboardButton("💠 Tu certificado"), KeyboardButton("🔍 Check UDID")],
+            [KeyboardButton("⚙️ Settings")],
+            *bot.USER_MENU.keyboard[2:],
+        ])
+        with patch.object(bot, "USER_MENU", extended), patch.object(bot.db, "private_setting", return_value=""):
+            self.assertEqual(bot.menu_slot("seller", 1, 0), "seller_my_certificate")
+            self.assertEqual(bot.user_menu("es").keyboard[1][0].text, "💠 Tu certificado")
+            self.assertEqual(bot.menu_button_label("seller_my_certificate"), "Menú de vendedores · 💠 Tu certificado")
 
     def test_certificate_actions_have_distinct_editable_icons(self):
         with patch.object(bot.db, "private_setting", side_effect=lambda key: "2222222222222222222" if key == "certemoji:get_certificate" else ""):
