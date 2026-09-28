@@ -165,7 +165,49 @@ def is_vip_row(user) -> bool:
 
 
 def user_menu(language: str):
-    return USER_MENU_EN if language == "en" else USER_MENU
+    return style_menu(USER_MENU_EN if language == "en" else USER_MENU, "seller")
+
+
+EMOJI_MENU_GROUPS = {
+    "seller": ("Menú de vendedores", USER_MENU),
+    "admin": ("Menú de administración", ADMIN_MENU),
+    "vip": ("Menú VIP", VIP_ADMIN_MENU),
+    "access": ("Menú de acceso", PENDING_MENU),
+    "certificate": ("Menú del certificado", CERTIFICATE_MENU),
+}
+
+
+def menu_slot(group: str, row: int, column: int) -> str:
+    if group == "certificate":
+        return {(0, 0): "welcome", (1, 0): "ios", (2, 0): "check_udid",
+                (2, 1): "use_key"}.get((row, column), f"certificate_{row}_{column}")
+    return f"{group}_{row}_{column}"
+
+
+def style_menu(markup: ReplyKeyboardMarkup, group: str) -> ReplyKeyboardMarkup:
+    rows = []
+    for row_number, row in enumerate(markup.keyboard):
+        buttons = []
+        for column, button in enumerate(row):
+            emoji_id = certificate_emoji(menu_slot(group, row_number, column))
+            label = button.text.split(" ", 1)[-1] if emoji_id and " " in button.text else button.text
+            buttons.append(KeyboardButton(label, icon_custom_emoji_id=emoji_id))
+        rows.append(buttons)
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
+
+def canonical_menu_text(value: str) -> str:
+    for _, markup in EMOJI_MENU_GROUPS.values():
+        for row in markup.keyboard:
+            for button in row:
+                if value == button.text.split(" ", 1)[-1]:
+                    return button.text
+    for markup in (USER_MENU_EN, ADMIN_MENU_EN, VIP_ADMIN_MENU_EN, PENDING_MENU_EN, CERTIFICATE_MENU_EN):
+        for row in markup.keyboard:
+            for button in row:
+                if value == button.text.split(" ", 1)[-1]:
+                    return button.text
+    return value
 
 
 CERTIFICATE_EMOJI_DEFAULTS = {
@@ -179,13 +221,18 @@ CERTIFICATE_EMOJI_DEFAULTS = {
 
 
 def certificate_emoji(slot: str) -> str | None:
-    if slot not in CERTIFICATE_EMOJI_DEFAULTS:
+    if slot not in CERTIFICATE_EMOJI_DEFAULTS and not any(
+        slot == menu_slot(group, row, column)
+        for group, (_, markup) in EMOJI_MENU_GROUPS.items()
+        for row, buttons in enumerate(markup.keyboard)
+        for column, _ in enumerate(buttons)
+    ):
         return None
     try:
         value = db.private_setting(f"certemoji:{slot}")
     except sqlite3.OperationalError:
         value = ""
-    return None if value == "-" else value or CERTIFICATE_EMOJI_DEFAULTS[slot] or None
+    return None if value == "-" else value or CERTIFICATE_EMOJI_DEFAULTS.get(slot) or None
 
 
 def certificate_menu(language: str, custom_icons: bool = False):
@@ -197,19 +244,20 @@ def certificate_menu(language: str, custom_icons: bool = False):
         [KeyboardButton(ios, icon_custom_emoji_id=certificate_emoji("ios"))],
         [KeyboardButton("Check UDID", icon_custom_emoji_id=certificate_emoji("check_udid")),
          KeyboardButton("Use Key", icon_custom_emoji_id=certificate_emoji("use_key"))],
-        [KeyboardButton("⚙️ Settings")],
+        [KeyboardButton("Settings" if certificate_emoji("certificate_3_0") else "⚙️ Settings",
+                        icon_custom_emoji_id=certificate_emoji("certificate_3_0"))],
     ], resize_keyboard=True)
 
 
 def pending_menu(language: str):
-    return PENDING_MENU_EN if language == "en" else PENDING_MENU
+    return style_menu(PENDING_MENU_EN if language == "en" else PENDING_MENU, "access")
 
 
 def admin_menu(user):
     language = language_of(user)
     if user["role"] == "admin":
-        return ADMIN_MENU_EN if language == "en" else ADMIN_MENU
-    return VIP_ADMIN_MENU_EN if language == "en" else VIP_ADMIN_MENU
+        return style_menu(ADMIN_MENU_EN if language == "en" else ADMIN_MENU, "admin")
+    return style_menu(VIP_ADMIN_MENU_EN if language == "en" else VIP_ADMIN_MENU, "vip")
 
 
 def money(cents: int) -> str:
@@ -395,9 +443,9 @@ async def access_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     first = db.request_access(user["telegram_id"])
     if first:
         await notify_access_request(context, db.user(user["telegram_id"]))
-        await update.effective_message.reply_text("✅ Solicitud enviada. Un administrador debe aprobarte.", reply_markup=PENDING_MENU)
+        await update.effective_message.reply_text("✅ Solicitud enviada. Un administrador debe aprobarte.", reply_markup=style_menu(PENDING_MENU, "access"))
     else:
-        await update.effective_message.reply_text("⏳ Tu solicitud ya está pendiente.", reply_markup=PENDING_MENU)
+        await update.effective_message.reply_text("⏳ Tu solicitud ya está pendiente.", reply_markup=style_menu(PENDING_MENU, "access"))
 
 
 def product_buttons(prefix: str, active_only: bool = True, user_id: int | None = None,
@@ -1046,7 +1094,7 @@ async def key_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = current_user(update)
-    text = (update.effective_message.text or "").strip()
+    text = canonical_menu_text((update.effective_message.text or "").strip())
     admin_panel = panel(context) == "admin"
     if admin_panel and not can_control_keys(update.effective_user.id):
         await update.effective_message.reply_text("⛔ Este bot es privado.")
@@ -1130,7 +1178,7 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 [InlineKeyboardButton("📦 Foto de producto", callback_data="media:products")],
                 [InlineKeyboardButton("🍎 Portada del certificado", callback_data="certcover:upload")],
                 [InlineKeyboardButton("🖼️ Logos · GBox / ESign / archivos", callback_data="certlogos:menu")],
-                [InlineKeyboardButton("🎭 Emojis · bienvenida / GBox / ESign", callback_data="certemoji:menu")],
+                [InlineKeyboardButton("🎭 Editar emojis de todos los menús", callback_data="certemoji:menu")],
                 [InlineKeyboardButton("ID de emoji Premium", callback_data="certemoji:get")],
                 [InlineKeyboardButton("📱 IPA para instalar · GBox / ESign", callback_data="certipa:menu")],
             ]),
@@ -1296,7 +1344,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         product = db.product(flow["product_id"])
         if not product:
             context.user_data.pop("flow", None)
-            await message.reply_text("❌ Producto no encontrado.", reply_markup=ADMIN_MENU)
+            await message.reply_text("❌ Producto no encontrado.", reply_markup=style_menu(ADMIN_MENU, "admin"))
             return True
         context.user_data.pop("flow", None)
         keys = InlineKeyboardMarkup([[
@@ -1336,17 +1384,17 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         ok = db.activate_partner(flow["login"], text, message.from_user.id)
         context.user_data.pop("flow", None)
         if not ok:
-            await message.reply_text("❌ Usuario o contraseña incorrectos, o la cuenta ya fue vinculada.", reply_markup=PENDING_MENU)
+            await message.reply_text("❌ Usuario o contraseña incorrectos, o la cuenta ya fue vinculada.", reply_markup=style_menu(PENDING_MENU, "access"))
         else:
             linked = db.user(message.from_user.id)
             if linked["role"] == "admin":
                 await message.reply_text(
                     "✅ Cuenta vinculada con rol <b>Administrador</b>.\nYa puedes abrir el bot privado de administración.",
                     parse_mode=ParseMode.HTML,
-                    reply_markup=USER_MENU,
+                    reply_markup=style_menu(USER_MENU, "seller"),
                 )
             else:
-                await message.reply_text("✅ Cuenta vinculada. Ya eres socio comprador.", reply_markup=USER_MENU)
+                await message.reply_text("✅ Cuenta vinculada. Ya eres socio comprador.", reply_markup=style_menu(USER_MENU, "seller"))
         return True
     if flow["name"] == "partner_create_login":
         flow["name"], flow["login"] = "partner_create_password", text
@@ -1384,7 +1432,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             f"Rango: <b>{'Administrador' if flow['target_role'] == 'admin' else ('Socio VIP' if flow.get('target_tier') == 'vip' else 'Socio Regular')}</b>\n"
             f"Saldo al vincularse: <b>{money(initial_balance)}</b>",
             parse_mode=ParseMode.HTML,
-            reply_markup=ADMIN_MENU,
+            reply_markup=style_menu(ADMIN_MENU, "admin"),
         )
         return True
     if flow["name"] == "broadcast":
@@ -1449,7 +1497,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         await message.reply_text(
             f"📢 <b>Reporte del anuncio</b>\n✅ Entregados: {sent}\n❌ No entregados: {failed}",
             parse_mode=ParseMode.HTML,
-            reply_markup=ADMIN_MENU,
+            reply_markup=style_menu(ADMIN_MENU, "admin"),
         )
         return True
     if flow["name"] == "product_file":
@@ -1466,7 +1514,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             message.document.file_name or "producto", file_data,
         )
         context.user_data.pop("flow", None)
-        await message.reply_text("✅ Archivo vinculado al producto.", reply_markup=ADMIN_MENU)
+        await message.reply_text("✅ Archivo vinculado al producto.", reply_markup=style_menu(ADMIN_MENU, "admin"))
         return True
 
     if flow["name"] == "product_photo":
@@ -1482,7 +1530,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         filename = "product.png" if message.document and message.document.mime_type == "image/png" else "product.jpg"
         db.set_product_photo(flow["product_id"], data, filename)
         context.user_data.pop("flow", None)
-        await message.reply_text("✅ Portada guardada. Ya aparece en 🛒 Comprar keys y al abrir el producto.", reply_markup=ADMIN_MENU)
+        await message.reply_text("✅ Portada guardada. Ya aparece en 🛒 Comprar keys y al abrir el producto.", reply_markup=style_menu(ADMIN_MENU, "admin"))
         return True
 
     if flow["name"] == "certificate_cover_photo":
@@ -1496,7 +1544,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         tg_file = await context.bot.get_file(photo_info.file_id)
         db.set_certificate_offer_photo(bytes(await tg_file.download_as_bytearray()))
         context.user_data.pop("flow", None)
-        await message.reply_text("✅ Foto del certificado guardada. Aparecerá en 🍎 Certificado iOS y en la página privada de entrega.", reply_markup=ADMIN_MENU)
+        await message.reply_text("✅ Foto del certificado guardada. Aparecerá en 🍎 Certificado iOS y en la página privada de entrega.", reply_markup=style_menu(ADMIN_MENU, "admin"))
         return True
 
     if flow["name"] == "certificate_logo_photo":
@@ -1515,7 +1563,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         kind = flow["kind"]
         db.set_certificate_logo(kind, data)
         context.user_data.pop("flow", None)
-        await message.reply_text(f"✅ Logo de {kind} guardado para el certificado y la web.", reply_markup=ADMIN_MENU)
+        await message.reply_text(f"✅ Logo de {kind} guardado para el certificado y la web.", reply_markup=style_menu(ADMIN_MENU, "admin"))
         return True
 
     if flow["name"] == "certificate_emoji_assign":
@@ -1525,15 +1573,34 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         if value.lower() in ("borrar", "quitar", "remove"):
             db.set_private_setting(f"certemoji:{slot}", "-")
             context.user_data.pop("flow", None)
-            await message.reply_text(f"✅ Icono de {slot} desactivado. Se usará el emoji normal.", reply_markup=ADMIN_MENU)
+            await message.reply_text(f"✅ Icono de {slot} desactivado. Se usará el emoji normal.", reply_markup=style_menu(ADMIN_MENU, "admin"))
             return True
         if not emoji_id:
             await message.reply_text("Envía un emoji Premium como mensaje, pega su ID numérico, o escribe borrar.")
             return True
+        try:
+            stickers = await context.bot.get_custom_emoji_stickers([emoji_id])
+        except BadRequest:
+            stickers = []
+        if not stickers:
+            await message.reply_text("❌ Telegram no reconoce ese ID como emoji personalizado. Envíame el emoji directamente desde Telegram o prueba con otro ID.")
+            return True
         db.set_private_setting(f"certemoji:{slot}", emoji_id)
         context.user_data.pop("flow", None)
-        await message.reply_text(f"✅ Emoji de {slot} guardado: <code>{html.escape(emoji_id)}</code>.",
-                                 parse_mode=ParseMode.HTML, reply_markup=ADMIN_MENU)
+        preview = stickers[0].emoji or "⭐"
+        try:
+            await message.reply_text(
+                f"✅ Guardado para <b>{html.escape(flow.get('label', slot))}</b>. Vista previa abajo. Abre /start para ver el menú actualizado.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                    "Vista previa · editar emojis", callback_data="certemoji:menu",
+                    icon_custom_emoji_id=emoji_id)]]))
+        except BadRequest as exc:
+            db.set_private_setting(f"certemoji:{slot}", "-")
+            await message.reply_text(
+                f"⚠️ Telegram aceptó el emoji {preview}, pero rechazó usarlo en un botón ({html.escape(str(exc))}). "
+                "El dueño del bot necesita Premium activo o un nombre adicional comprado en Fragment. No se aplicó el cambio.",
+                parse_mode=ParseMode.HTML, reply_markup=style_menu(ADMIN_MENU, "admin"))
         return True
 
     if flow["name"] == "certificate_emoji_id":
@@ -1543,7 +1610,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             return True
         context.user_data.pop("flow", None)
         await message.reply_text(f"ID del emoji: <code>{html.escape(emoji_id)}</code>\nCópialo y envíamelo aquí para ponerlo en los botones.",
-                                 parse_mode=ParseMode.HTML, reply_markup=ADMIN_MENU)
+                                 parse_mode=ParseMode.HTML, reply_markup=style_menu(ADMIN_MENU, "admin"))
         return True
 
     if flow["name"] == "certificate_ipa_upload":
@@ -1568,7 +1635,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         await message.reply_text(
             f"✅ IPA {kind.upper()} v{version} guardada. ID: {bundle_id}.\n"
             "Cada cliente con certificado listo podrá preparar su instalación privada.",
-            reply_markup=ADMIN_MENU,
+            reply_markup=style_menu(ADMIN_MENU, "admin"),
         )
         return True
 
@@ -1581,7 +1648,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         name = "product.tgs" if message.sticker.is_animated else ("product.webm" if message.sticker.is_video else "product.webp")
         db.set_product_sticker(flow["product_id"], data, name)
         context.user_data.pop("flow", None)
-        await message.reply_text("✅ Sticker guardado para el producto.", reply_markup=ADMIN_MENU)
+        await message.reply_text("✅ Sticker guardado para el producto.", reply_markup=style_menu(ADMIN_MENU, "admin"))
         return True
 
     if flow["name"] in ("partner_balance_add", "partner_balance_subtract"):
@@ -1597,7 +1664,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         context.user_data.pop("flow", None)
         action = "agregó" if amount > 0 else "retiró"
         await message.reply_text(
-            f"✅ Se {action} {money(abs(amount))}. Nuevo saldo: {money(balance)}", reply_markup=ADMIN_MENU
+            f"✅ Se {action} {money(abs(amount))}. Nuevo saldo: {money(balance)}", reply_markup=style_menu(ADMIN_MENU, "admin")
         )
         try:
             await reseller_bot(context).send_message(
@@ -1618,7 +1685,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             await message.reply_text("❌ No se pudo entregar. El socio debe iniciar el bot de revendedores.")
             return True
         context.user_data.pop("flow", None)
-        await message.reply_text("✅ Advertencia enviada al socio.", reply_markup=ADMIN_MENU)
+        await message.reply_text("✅ Advertencia enviada al socio.", reply_markup=style_menu(ADMIN_MENU, "admin"))
         return True
 
     if flow["name"] == "partner_price":
@@ -1632,7 +1699,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         product = db.product(flow["product_id"])
         context.user_data.pop("flow", None)
         await message.reply_text(
-            f"✅ Precio para este socio: {html.escape(product['name'])} = {money(price)}", reply_markup=ADMIN_MENU
+            f"✅ Precio para este socio: {html.escape(product['name'])} = {money(price)}", reply_markup=style_menu(ADMIN_MENU, "admin")
         )
         try:
             await reseller_bot(context).send_message(target, f"💲 Tienes un precio especial en {product['name']}: {money(price)}")
@@ -1688,7 +1755,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         )
         method = {"zelle": "Zelle", "cashapp": "Cash App", "paypal": "PayPal"}.get(flow.get("method"), "No indicado")
         context.user_data.pop("flow", None)
-        await message.reply_text(f"✅ Recarga #{topup_id} enviada. Espera la aprobación del Admin.", reply_markup=USER_MENU)
+        await message.reply_text(f"✅ Recarga #{topup_id} enviada. Espera la aprobación del Admin.", reply_markup=style_menu(USER_MENU, "seller"))
         item = db.topup(topup_id)
         keys = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Aprobar", callback_data=f"topup:approve:{topup_id}"),
@@ -1725,7 +1792,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         now = datetime.now(ZoneInfo("America/New_York"))
         db.set_daily_announcement(flow["body"], text, now.date().isoformat() if now.strftime("%H:%M") >= text else None)
         context.user_data.pop("flow", None)
-        await message.reply_text(f"✅ Anuncio diario guardado para las {text} (Nueva York).", reply_markup=ADMIN_MENU)
+        await message.reply_text(f"✅ Anuncio diario guardado para las {text} (Nueva York).", reply_markup=style_menu(ADMIN_MENU, "admin"))
         return True
 
     if flow["name"] == "product_edit":
@@ -1755,7 +1822,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             await message.reply_text(f"❌ {html.escape(str(exc))}. Inténtalo otra vez.")
             return True
         context.user_data.pop("flow", None)
-        await message.reply_text("✅ Producto actualizado sin borrar sus keys, archivos ni precios por socio. Reabre 🛒 Comprar keys para ver la lista nueva.", reply_markup=ADMIN_MENU)
+        await message.reply_text("✅ Producto actualizado sin borrar sus keys, archivos ni precios por socio. Reabre 🛒 Comprar keys para ver la lista nueva.", reply_markup=style_menu(ADMIN_MENU, "admin"))
         return True
 
     if flow["name"] == "product_name":
@@ -1810,7 +1877,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         await message.reply_text(
             f"✅ Producto #{product_id} creado con duración de {flow['duration_days']} días.\n"
             "Ahora puedes agregar sus keys, archivo, foto y sticker animado.",
-            reply_markup=ADMIN_MENU,
+            reply_markup=style_menu(ADMIN_MENU, "admin"),
         )
         return True
 
@@ -1818,7 +1885,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         values = [line.strip() for line in text.splitlines()]
         added, duplicates = db.add_keys(flow["product_id"], values)
         context.user_data.pop("flow", None)
-        await message.reply_text(f"✅ Keys añadidas: {added}\nDuplicadas/omitidas: {duplicates}", reply_markup=ADMIN_MENU)
+        await message.reply_text(f"✅ Keys añadidas: {added}\nDuplicadas/omitidas: {duplicates}", reply_markup=style_menu(ADMIN_MENU, "admin"))
         return True
 
     return False
@@ -2066,7 +2133,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.edit_message_reply_markup(reply_markup=None)
             await query.message.reply_text(f"✅ Usuario {target}: {label}.")
             try:
-                await reseller_bot(context).send_message(target, "✅ Tu cuenta fue aprobada como revendedor." if role == "reseller" else "❌ Tu acceso de revendedor no fue aprobado.", reply_markup=USER_MENU if role == "reseller" else PENDING_MENU)
+                await reseller_bot(context).send_message(target, "✅ Tu cuenta fue aprobada como revendedor." if role == "reseller" else "❌ Tu acceso de revendedor no fue aprobado.", reply_markup=style_menu(USER_MENU, "seller") if role == "reseller" else style_menu(PENDING_MENU, "access"))
             except Exception:
                 pass
         return
@@ -2106,28 +2173,45 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.message.reply_text(f"📷 Envía el logo para {kind} como foto o JPG/PNG (máximo 2 MB).")
         return
 
-    if data == "certemoji:menu" or data.startswith("certemoji:set:"):
+    if data == "certemoji:menu" or data.startswith(("certemoji:group:", "certemoji:set:")):
         if not admin_panel or not is_admin(query.from_user.id):
             await query.answer("Solo Admin", show_alert=True)
             return
         await query.answer()
         if data == "certemoji:menu":
-            slots = (("welcome", "Bienvenida"), ("ios", "Certificado iOS"),
-                     ("use_key", "Use Key"), ("check_udid", "Check UDID"),
-                     ("gbox", "GBox"), ("esign", "ESign"))
             await query.message.reply_text(
-                "🎭 <b>Emojis del certificado</b>\nElige un botón y envía su emoji Premium o su ID. "
-                "Puedes escribir <b>borrar</b> para usar el icono normal.",
+                "🎭 <b>Emojis del bot</b>\nElige el menú que quieres editar. "
+                "También puedes cambiar los botones GBox y ESign.",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton(label, callback_data=f"certemoji:set:{slot}")]
-                    for slot, label in slots
+                    [InlineKeyboardButton(label, callback_data=f"certemoji:group:{group}")]
+                    for group, (label, _) in EMOJI_MENU_GROUPS.items()
+                ] + [
+                    [InlineKeyboardButton("GBox", callback_data="certemoji:set:gbox"),
+                     InlineKeyboardButton("ESign", callback_data="certemoji:set:esign")],
                 ]))
+        elif data.startswith("certemoji:group:"):
+            group = data.rsplit(":", 1)[-1]
+            if group not in EMOJI_MENU_GROUPS:
+                return
+            _, markup = EMOJI_MENU_GROUPS[group]
+            buttons = []
+            for row_number, row in enumerate(markup.keyboard):
+                for column, button in enumerate(row):
+                    slot = menu_slot(group, row_number, column)
+                    buttons.append([InlineKeyboardButton(button.text, callback_data=f"certemoji:set:{slot}")])
+            await query.message.reply_text("Elige el botón. Envía después un emoji Premium o su ID; escribe borrar para recuperar el emoji normal.",
+                                           reply_markup=InlineKeyboardMarkup(buttons))
         else:
             slot = data.rsplit(":", 1)[-1]
-            if slot not in CERTIFICATE_EMOJI_DEFAULTS:
+            if slot not in CERTIFICATE_EMOJI_DEFAULTS and certificate_emoji(slot) is None and not any(
+                slot == menu_slot(group, row, column)
+                for group, (_, markup) in EMOJI_MENU_GROUPS.items()
+                for row, buttons in enumerate(markup.keyboard)
+                for column, _ in enumerate(buttons)
+            ):
                 return
-            context.user_data["flow"] = {"name": "certificate_emoji_assign", "slot": slot}
+            context.user_data["flow"] = {"name": "certificate_emoji_assign", "slot": slot, "label": slot}
             await query.message.reply_text(f"Envía el emoji para <b>{html.escape(slot)}</b>, su ID, o escribe borrar.",
                                            parse_mode=ParseMode.HTML)
         return

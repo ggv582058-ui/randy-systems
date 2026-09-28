@@ -28,6 +28,17 @@ class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(buttons[1][0].icon_custom_emoji_id, "5278343321624787703")
         self.assertEqual(buttons[2][0].icon_custom_emoji_id, "5429571366384842791")
 
+    def test_admin_can_customize_seller_menu_without_breaking_navigation(self):
+        with patch.object(bot.db, "private_setting", side_effect=lambda key: "5319007286004299794" if key == "certemoji:seller_0_0" else ""):
+            button = bot.user_menu("es").keyboard[0][0]
+        self.assertEqual(button.text, "Certificado iOS")
+        self.assertEqual(button.icon_custom_emoji_id, "5319007286004299794")
+        self.assertEqual(bot.canonical_menu_text(button.text), "🍎 Certificado iOS")
+
+    def test_certificate_menu_editor_targets_existing_welcome_slot(self):
+        self.assertEqual(bot.menu_slot("certificate", 0, 0), "welcome")
+        self.assertEqual(bot.menu_slot("certificate", 2, 1), "use_key")
+
     async def test_catalog_waits_for_product_selection_before_sending_a_photo(self):
         message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
         update = SimpleNamespace(effective_user=SimpleNamespace(id=2), effective_message=message)
