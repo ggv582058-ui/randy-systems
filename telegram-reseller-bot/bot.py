@@ -47,6 +47,7 @@ chungchi = ChungChiClient(settings.chungchi_base_url, settings.chungchi_api_key)
 _delivery_in_progress: set[int] = set()
 _delivery_retry_after: dict[int, float] = {}
 _delivery_notice_sent: set[int] = set()
+_wait_status_updated: dict[int, float] = {}
 
 
 ADMIN_MENU = ReplyKeyboardMarkup(
@@ -448,12 +449,24 @@ async def reply_with_icons(message, body: str, **kwargs):
 
 
 def key_receipt_text(sale: dict) -> str:
+    template = db.private_setting("key_receipt_template_html")
+    if template:
+        fields = {"producto": sale['product_name'], "key": sale['key'], "referencia": f"#{sale['order_id']}",
+                  "dias": str(sale['duration_days']), "vence": format_date(sale['expires_at']),
+                  "saldo": money(sale['balance_cents']), "instrucciones": sale['instructions']}
+        for name, value in fields.items():
+            replacement = html.escape(str(value))
+            if name == "key" and "<code>{key}</code>" not in template:
+                replacement = f"<code>{replacement}</code>"
+            template = template.replace("{" + name + "}", replacement)
+        return template
     title = db.private_setting("key_receipt_title") or DEFAULT_KEY_RECEIPT_TITLE
+    title_html = db.private_setting("key_receipt_title_html") or html.escape(title)
     custom_footer = db.private_setting("key_receipt_footer")
-    footer_html = (html.escape(custom_footer) if custom_footer else
+    footer_html = (db.private_setting("key_receipt_footer_html") or html.escape(custom_footer) if custom_footer else
                    "Puedes revisar el tiempo restante cuando quieras en <b>🔑 Mis keys</b>.")
     return (
-        f"{message_icon('receipt_title', '🎉')} <b>{html.escape(title)}</b>\n"
+        f"{message_icon('receipt_title', '🎉')} <b>{title_html}</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"{message_icon('receipt_product', '📦')} Producto: <b>{html.escape(sale['product_name'])}</b>\n"
         f"{message_icon('receipt_key', '🔑')} Tu key: <code>{html.escape(sale['key'])}</code>\n"
@@ -872,6 +885,17 @@ async def begin_udid_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data["flow"] = {"name": "certificate_lookup_udid"}
     await reply_certificate_menu(update.effective_message, "🔍 Envía el UDID que deseas consultar:",
                                  language_of(current_user(update)))
+    await update.effective_message.reply_text("¿Necesitas obtener el UDID de este equipo? Abre el enlace privado en Safari.",
+                                            reply_markup=udid_buttons(update.effective_user.id))
+
+
+def udid_buttons(user_id: int):
+    base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    if not base.startswith("https://"):
+        return None
+    token = secrets.token_urlsafe(32)
+    db.create_udid_session(token, user_id)
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🆔 Obtener mi UDID · Safari", url=f"{base}/udid/{token}")]])
 
 
 async def show_certificate_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, language: str) -> None:
@@ -917,6 +941,15 @@ def certificate_status_text(order) -> str:
         "revoked": "Revocado",
     }
     label = labels.get(order["status"], order["status"])
+    waiting_note = ("Espera unos minutos; sigo consultando al proveedor. Te avisaré aquí cuando esté listo. "
+                    "El tiempo final depende de la revisión del proveedor; puedes salir del chat."
+                    if order["status"] in ("submitting", "pending", "processing", "review") else
+                    "Contacta al soporte para revisar este pedido.")
+    elapsed = 0
+    try:
+        elapsed = max(0, int((datetime.now(timezone.utc) - datetime.fromisoformat(order["created_at"].replace("Z", "+00:00"))).total_seconds() // 60))
+    except (ValueError, TypeError, KeyError):
+        pass
     if order["status"] == "completed":
         registered = HealthHandler._pretty_date(order["completed_at"] or order["created_at"])
         device = "iPhone" if order["device"] == "iphone" else "iPad" if order["device"] == "ipad" else str(order["device"] or "iPhone")
@@ -938,7 +971,8 @@ def certificate_status_text(order) -> str:
         f"📱 Equipo: <b>{html.escape(str(order['device'] or 'iPhone'))}</b>\n"
         f"📅 Registro: <b>{html.escape(str(order['completed_at'] or order['created_at'] or 'Pendiente')[:10])}</b>\n"
         f"🧾 Pedido: <code>{html.escape(order['provider_order_code'] or 'pendiente')}</code>\n\n"
-        "Toca <b>Obtener certificado</b> para recibir los archivos por Telegram."
+        f"⏱ Tiempo transcurrido: <b>{elapsed} min</b>\n"
+        + waiting_note
     )
 
 
@@ -1024,6 +1058,7 @@ async def submit_certificate_order(message, context: ContextTypes.DEFAULT_TYPE, 
         "⏳ Registrando tu certificado. Puedes ver su estado mientras se prepara.",
         reply_markup=status_buttons,
     )
+    db.set_private_setting(f"certificate_wait:{local['id']}", json.dumps({"chat_id": status_message.chat_id, "message_id": status_message.message_id}))
     try:
         provider = await asyncio.to_thread(
             chungchi.create_order, settings.chungchi_plan_id, flow["udid"], flow["device"], flow["p12_password"]
@@ -1051,6 +1086,16 @@ async def refresh_certificate_order(bot, row) -> None:
         log.warning("No se actualizó certificado %s: %s", row["id"], exc)
         return
     updated = db.update_certificate_order(row["provider_order_code"], provider)
+    if updated and time.monotonic() - _wait_status_updated.get(int(updated["id"]), 0) > 60:
+        saved = db.private_setting(f"certificate_wait:{updated['id']}")
+        if saved:
+            try:
+                target = json.loads(saved)
+                await bot.edit_message_text(certificate_status_text(updated), **target, parse_mode=ParseMode.HTML,
+                                             reply_markup=certificate_file_buttons(updated))
+            except Exception as exc:
+                log.debug("No se pudo actualizar el contador del certificado %s: %s", updated["id"], exc)
+        _wait_status_updated[int(updated["id"])] = time.monotonic()
     if updated and updated["status"] == "completed" and not updated["delivered_at"]:
         await deliver_certificate(bot, updated)
 
@@ -1275,6 +1320,14 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = current_user(update)
     text = canonical_menu_text((update.effective_message.text or "").strip())
     admin_panel = panel(context) == "admin"
+    if getattr(update, "edited_message", None) and admin_panel and is_admin(update.effective_user.id):
+        source = f"{update.effective_chat.id}:{update.effective_message.message_id}"
+        field = next((field for field in ("title", "footer", "template")
+                      if db.private_setting(f"key_receipt_source:{field}") == source), None)
+        if field:
+            context.user_data["flow"] = {"name": "key_receipt_edit", "field": field}
+            await handle_flow(update, context)
+        return
     if not admin_panel and user["role"] == "reseller":
         product_texts = ("🛒 Comprar keys", "🛒 Buy keys", "🔑 Mis keys", "🔑 My keys",
                          "🔍 Consultar key", "🔍 Check key", "🧾 Historial", "🧾 History")
@@ -1759,15 +1812,22 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if flow["name"] == "key_receipt_edit":
         field = flow["field"]
         value = (message.text or "").strip()
-        limit = 70 if field == "title" else 300
+        limit = 70 if field == "title" else 300 if field == "footer" else 1400
         if not value or len(value) > limit:
             await message.reply_text(f"Envía un texto de 1 a {limit} caracteres. Usa /start para cancelar.")
             return True
-        key = "key_receipt_title" if field == "title" else "key_receipt_footer"
+        if field == "template" and "{key}" not in value:
+            await message.reply_text("Incluye {key} para entregar la key automáticamente. Los otros campos son opcionales.")
+            return True
+        key = f"key_receipt_{field}"
+        if field != "template":
+            db.set_private_setting("key_receipt_template_html", "")
         db.set_private_setting(key, value)
+        db.set_private_setting(key + "_html", message.text_html or html.escape(value))
+        db.set_private_setting(f"key_receipt_source:{field}", f"{message.chat_id}:{message.message_id}")
         context.user_data.pop("flow", None)
-        await message.reply_text("✅ Mensaje actualizado. Así verá la entrega el comprador:")
-        await message.reply_text(key_receipt_preview(), parse_mode=ParseMode.HTML,
+        await message.reply_text("✅ Guardado. Puedes editar este mismo mensaje desde Telegram: actualizaré la plantilla y sus emojis.")
+        await reply_with_icons(message, key_receipt_preview(),
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✏️ Seguir editando", callback_data="keyreceipt:menu")]]))
         return True
 
@@ -2199,7 +2259,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.message.reply_text(
                 "🆔 <b>02 / UDID</b>\nEnvía el UDID de tu iPhone o iPad.\n"
                 "Revísalo antes de continuar: debe corresponder al dispositivo seleccionado.",
-                parse_mode=ParseMode.HTML)
+                parse_mode=ParseMode.HTML, reply_markup=udid_buttons(query.from_user.id))
         else:
             await query.message.reply_text(
                 "🔐 <b>03 / Contraseña P12</b>\nEscribe una contraseña para tu certificado.",
@@ -2397,20 +2457,25 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     [InlineKeyboardButton("✏️ Título", callback_data="keyreceipt:edit:title"),
                      InlineKeyboardButton("✏️ Texto final", callback_data="keyreceipt:edit:footer")],
                     [InlineKeyboardButton("👁️ Vista previa", callback_data="keyreceipt:preview")],
+                    [InlineKeyboardButton("📝 Mensaje completo + emojis", callback_data="keyreceipt:edit:template")],
                     [InlineKeyboardButton("↩️ Restaurar texto original", callback_data="keyreceipt:reset")],
                 ]))
-        elif action[1] == "edit" and len(action) == 3 and action[2] in ("title", "footer"):
+        elif action[1] == "edit" and len(action) == 3 and action[2] in ("title", "footer", "template"):
             field = action[2]
             context.user_data["flow"] = {"name": "key_receipt_edit", "field": field}
+            if field == "template":
+                await query.message.reply_text("Envía el mensaje completo con tus emojis y formato de Telegram. Campos: {producto}, {key}, {referencia}, {dias}, {vence}, {saldo}, {instrucciones}. Incluye {key}. Puedes editar el mismo mensaje después de guardarlo. Máximo 1400 caracteres.")
+                return
             await query.message.reply_text(
                 "Escribe el nuevo título (máximo 70 caracteres):" if field == "title"
                 else "Escribe el texto final de la entrega (máximo 300 caracteres):")
         elif action[1] == "preview":
-            await query.message.reply_text("👁️ <b>Ejemplo para un comprador</b>\n\n" + key_receipt_preview(),
-                parse_mode=ParseMode.HTML)
+            await reply_with_icons(query.message, "👁️ <b>Ejemplo para un comprador</b>\n\n" + key_receipt_preview())
         elif action[1] == "reset":
-            db.set_private_setting("key_receipt_title", "")
-            db.set_private_setting("key_receipt_footer", "")
+            for field in ("title", "footer", "template"):
+                db.set_private_setting(f"key_receipt_{field}", "")
+                db.set_private_setting(f"key_receipt_{field}_html", "")
+                db.set_private_setting(f"key_receipt_source:{field}", "")
             await query.message.reply_text("✅ Texto original restaurado.\n\n" + key_receipt_preview(),
                 parse_mode=ParseMode.HTML)
         return
@@ -3077,6 +3142,8 @@ async def run_bots() -> None:
             "/telegram/admin": hashlib.sha256(settings.admin_bot_token.encode()).hexdigest(),
         }
         server.configure(paths, secrets)
+        from udid_flow import UDIDService
+        server.udid_service = UDIDService(db, reseller_app.bot, loop)
         base_url = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
         if not base_url.startswith("https://"):
             raise RuntimeError("Falta RENDER_EXTERNAL_URL o WEBHOOK_BASE_URL con HTTPS")

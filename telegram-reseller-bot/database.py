@@ -263,6 +263,13 @@ class Database:
                     delivered_at TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS udid_sessions (
+                    token TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(telegram_id),
+                    expires_at TEXT NOT NULL,
+                    udid TEXT,
+                    model TEXT
+                );
                 CREATE TABLE IF NOT EXISTS private_settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
@@ -529,6 +536,21 @@ class Database:
         with self.connect() as con:
             where = "role='reseller'" + ("" if include_certificates else " AND access_scope!='certificates'")
             return [r[0] for r in con.execute(f"SELECT telegram_id FROM users WHERE {where}").fetchall()]
+
+    def create_udid_session(self, token: str, user_id: int) -> None:
+        expires = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(timespec="seconds")
+        with self.transaction() as con:
+            con.execute("DELETE FROM udid_sessions WHERE expires_at<?", (utcnow(),))
+            con.execute("INSERT INTO udid_sessions(token,user_id,expires_at) VALUES(?,?,?)", (token,user_id,expires))
+
+    def udid_session(self, token: str):
+        with self.connect() as con:
+            return con.execute("SELECT * FROM udid_sessions WHERE token=? AND expires_at>?", (token,utcnow())).fetchone()
+
+    def complete_udid_session(self, token: str, udid: str, model: str) -> bool:
+        with self.transaction() as con:
+            return con.execute("UPDATE udid_sessions SET udid=?,model=? WHERE token=? AND expires_at>? AND udid IS NULL",
+                               (udid,model,token,utcnow())).rowcount == 1
 
     def set_access_scope(self, telegram_id: int, scope: str) -> bool:
         if scope not in {"all", "certificates", "products"}:

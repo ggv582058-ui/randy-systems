@@ -129,7 +129,7 @@ class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.context.user_data["flow"], {"name": "certificate_lookup_udid"})
         self.assertNotIn("certificate_pending", self.context.user_data)
-        self.assertIn("Envía el UDID", self.reply.await_args.args[0])
+        self.assertTrue(any("Envía el UDID" in call.args[0] for call in self.reply.await_args_list))
 
     async def test_device_selection_precedes_udid_and_password(self):
         row = {"key_code": "CERT-TEST", "status": "available"}

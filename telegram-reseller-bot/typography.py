@@ -13,7 +13,7 @@ from telegram.ext import ExtBot
 
 
 _TOKEN = re.compile(
-    r"(https?://\S+|www\.\S+|@[\w]+|/[A-Za-z][\w-]*|"
+    r"(\{(?:producto|key|referencia|dias|vence|saldo|instrucciones)\}|https?://\S+|www\.\S+|@[\w]+|/[A-Za-z][\w-]*|"
     r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|&(?:#[0-9]+|#x[0-9A-Fa-f]+|[A-Za-z]+);|"
     r"\b(?=[A-Za-z0-9-]{8,}\b)(?=[A-Za-z0-9-]*\d)[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+\b)"
 )

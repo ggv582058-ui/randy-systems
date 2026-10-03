@@ -36,6 +36,7 @@ class BotHTTPServer(ThreadingHTTPServer):
         self.certificate_logo = None
         self.certificate_signed_lookup = None
         self.certificate_ipa_save = None
+        self.udid_service = None
 
     def configure(self, applications: dict, secrets: dict[str, str]) -> None:
         self.applications = applications
@@ -54,6 +55,16 @@ class BotHTTPServer(ThreadingHTTPServer):
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
+        if self.server.udid_service and self.server.udid_service.handle_get(self, path):
+            return
+        if path == "/brand/cover":
+            data = (Path(__file__).parent / "randy-mod-cover.jpg").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if path == "/certificate/tutorial":
             data = (Path(__file__).parent / "certificate-tutorial.mp4").read_bytes()
             self.send_response(200)
@@ -160,7 +171,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         launch_url = f"{base}/certificate/launch/{safe_token}?app={kind}"
         main_button = (f'<button id="install" class="install" type="button">Continuar a Safari <span>↗</span></button>'
                        if signed and base.startswith("https://") else
-                       '<div class="waiting">La firma de la app aún no está lista. Vuelve al bot y toca <b>Preparar GBox</b>.</div>')
+                       f'<div class="waiting">La firma de la app aún no está lista. Vuelve al bot y toca <b>Preparar {name}</b>.</div>')
         body = f'''<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#061a12"><title>{name} · Randy Mod</title>
@@ -168,10 +179,12 @@ class HealthHandler(BaseHTTPRequestHandler):
 *{{box-sizing:border-box}}html{{background:#04110d}}body{{margin:0;color:#f4fff8;font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh;background:radial-gradient(circle at 50% -15%,#1b9f6466,transparent 55%),linear-gradient(#051d14,#030c0c);overflow-x:hidden}}body:before{{content:"";position:fixed;inset:-28%;background:radial-gradient(ellipse at 30% 33%,#0e9f6240,transparent 35%),radial-gradient(ellipse at 75% 68%,#137dac33,transparent 32%);filter:blur(35px);animation:drift 11s ease-in-out infinite alternate;pointer-events:none}}@keyframes drift{{to{{transform:translate(8%,-7%) rotate(9deg)}}}}
 main{{max-width:460px;min-height:100vh;margin:auto;padding:28px 20px calc(36px + env(safe-area-inset-bottom));text-align:center;position:relative}}
 main:before{{content:"";position:absolute;z-index:0;top:30px;left:15%;right:15%;height:260px;opacity:.13;background:url('/certificate/cover/{safe_token}') center/cover;border-radius:50%;filter:blur(28px);pointer-events:none}}
+.brand-art{{position:relative;margin:24px 0 0;height:150px;border-radius:24px;overflow:hidden;border:1px solid #79bfff40;background:#0b1c31}}.brand-art img{{width:55%;height:100%;object-fit:cover;object-position:center;animation:float-art 7s ease-in-out infinite alternate}}.brand-art:after{{content:"RANDY MOD / PRIVATE APPS";position:absolute;right:14px;top:48px;width:40%;font-size:14px;line-height:1.6;font-weight:800;color:#b5dfff}}@keyframes float-art{{to{{transform:scale(1.08) translateY(-3px)}}}}@media(prefers-reduced-motion:reduce){{.brand-art img{{animation:none}}}}
 .brand{{position:relative;text-align:left;font-size:12px;letter-spacing:3px;color:#9cbcaf;font-weight:800}}
 .orb{{position:relative;margin:55px auto 24px;width:154px;height:154px;border-radius:39px;background:linear-gradient(145deg,#12dc80,#026c48);display:grid;place-items:center;box-shadow:0 0 0 13px #49e8a010,0 0 0 35px #49e8a008,0 25px 90px #00c47b55;animation:rise .7s ease both,glow 3.8s ease-in-out 1s infinite alternate}}.orb img{{width:120px;height:120px;object-fit:cover;border-radius:30px}}@keyframes rise{{from{{opacity:0;transform:scale(.8) translateY(20px)}}to{{opacity:1;transform:scale(1) translateY(0)}}}}@keyframes glow{{to{{box-shadow:0 0 0 21px #49e8a018,0 0 0 45px #49e8a00b,0 25px 105px #00c47b88}}}}
 h1{{font-size:37px;margin:10px 0 2px;letter-spacing:-1px}}.version{{font-size:13px;color:#8caf9c}}.badge{{display:inline-block;margin-top:18px;padding:9px 15px;background:#33d99020;border:1px solid #66f7a85c;border-radius:999px;color:#a9f7ca;font-size:12px;font-weight:800;letter-spacing:.7px}}.hint{{margin:22px 0 20px;color:#bdd3c4;font-size:14px;line-height:1.55}}.install{{display:flex;align-items:center;justify-content:center;width:100%;border:0;border-radius:18px;text-decoration:none;font-size:17px;font-weight:750;min-height:58px;color:#022a18;background:#30db91;box-shadow:0 10px 34px #04bd7560}}.install span{{position:absolute;right:43px}}.waiting{{padding:18px;border-radius:16px;background:#133829;color:#cff1d8;line-height:1.5}}.foot{{margin-top:25px;color:#8da69b;font-size:12px;line-height:1.5}}video{{margin-top:20px;width:100%;border-radius:16px;background:#0b2419;max-height:220px}}.video-title{{margin-top:34px;color:#cef1da;text-align:left;font-size:13px;font-weight:700}}.web{{display:block;margin-top:25px;color:#96d7b2;font-size:13px}}@media(prefers-reduced-motion:reduce){{body:before,.orb{{animation:none}}}}
 </style></head><body><main><div class="brand">RANDY MOD / INSTALACIÓN PRIVADA</div>
+<div class="brand-art"><img src="/certificate/cover/{safe_token}" alt="Randy Mod"></div>
 <div class="orb"><img src="/certificate/logo/{safe_token}/{kind}" alt="Logo {name}"></div>
 <h1>{name}</h1><div class="version">App privada para tu certificado</div><div class="badge">{'FIRMA LISTA · TU EQUIPO' if signed else 'CERTIFICADO RECIBIDO'}</div>
 <p class="hint">Tu certificado ya está en Telegram. Abre la instalación en Safari y después importa los archivos P12 y MobileProvision en {name}.</p>
@@ -273,7 +286,7 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
           </div>
           <div class="source-links"><a href="https://cdn.gbox.run/d/apps/GBox_v6.1.2.ipa" rel="noopener noreferrer" target="_blank">Descargar IPA GBox · requiere firma ↗</a><a href="https://github.com/qbap/Esign-IPA-Installer" rel="noopener noreferrer" target="_blank">Guía y descarga ESign ↗</a></div>
         """ if ready else """
-          <div class="waiting"><div class="loader"></div><div><b>Preparando certificado</b><small>La página se actualizará cuando los archivos estén listos.</small></div></div>
+          <div class="waiting"><div class="loader"></div><div><b>Preparando certificado</b><small>Tiempo transcurrido: <span id="wait-time">consultando…</span></small><small>Espera unos minutos. Te avisaré en Telegram; la revisión depende del proveedor.</small></div></div>
         """)
 
         script = (f"""
@@ -298,7 +311,11 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
           setTimeout(() => el.classList.remove('copied'), 900);
         }});
         </script>
-        """ if ready else "")
+        """ if ready else f"""<script>
+        const started=Date.parse({json.dumps(str(order['created_at']))});
+        function updateWait() {{const seconds=Math.max(0,Math.floor((Date.now()-started)/1000));document.getElementById('wait-time').textContent=Math.floor(seconds/60)+' min '+(seconds%60)+' s';}}
+        updateWait();setInterval(updateWait,1000);setTimeout(()=>location.reload(),20000);
+        </script>""")
 
 
         body = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
@@ -488,6 +505,8 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
     def do_POST(self) -> None:
         server: BotHTTPServer = self.server
         path = urlsplit(self.path).path
+        if server.udid_service and server.udid_service.handle_post(self, path):
+            return
         if path == "/maintenance/import-esign":
             secret = os.getenv("IPA_IMPORT_SECRET", "")
             supplied = self.headers.get("X-IPA-Import-Secret", "")
