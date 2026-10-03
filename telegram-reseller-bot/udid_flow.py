@@ -2,11 +2,16 @@
 import asyncio
 import html
 import hmac
+import logging
 import os
 import plistlib
 import re
 import subprocess
 import uuid
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+log = logging.getLogger(__name__)
 
 
 def profile(base, token):
@@ -61,7 +66,9 @@ class UDIDService:
             handler.send_header("Content-Disposition", 'attachment; filename="Randy-UDID.mobileconfig"')
         elif len(parts) == 2:
             udid = html.escape(row["udid"] or "")
-            result = (f'<h2>Tu UDID está listo</h2><code id="udid">{udid}</code><button onclick="navigator.clipboard.writeText(document.getElementById(\'udid\').textContent)">Copiar UDID</button><p>Cópialo y vuelve al chat para continuar. Puedes quitar el perfil de Ajustes.</p>'
+            username = getattr(self.bot, "username", None) or "XxResellerbot"
+            back = f"https://t.me/{username}?start=udid_{token}"
+            result = (f'<h2>Tu UDID está listo</h2><p>Equipo: {html.escape(row["model"] or "iPhone / iPad")}</p><code id="udid">{udid}</code><button onclick="navigator.clipboard.writeText(document.getElementById(\'udid\').textContent)">Copiar UDID</button><a class="button" href="{back}">Continuar en Telegram ↗</a><p>Tu UDID se guarda en tu sesión. Puedes quitar el perfil de Ajustes.</p>'
                       if udid else f'<h1>Tu equipo.<br>Tu certificado.</h1><p>Obtén el UDID de este iPhone o iPad para registrar tu certificado.</p><a class="button" href="/udid/profile/{token}">Obtener mi UDID ↗</a><ol><li>Abre esta página en Safari.</li><li>Descarga el perfil y permite la descarga.</li><li>Ajustes → Perfil descargado → Instalar.</li><li>Vuelve aquí. El UDID también llegará a Telegram.</li></ol><p class="small">El perfil solicita UDID y modelo. Se vinculan a tu cuenta durante 30 minutos. No configura administración remota. Puedes quitarlo después.</p>')
             payload = f'''<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Randy Mod · UDID</title><style>
 *{{box-sizing:border-box}}body{{margin:0;background:#050f1a;color:#edf8ff;font:16px system-ui}}main{{max-width:640px;margin:auto;padding:24px}}.brand{{letter-spacing:3px;color:#78baff;font-size:12px;font-weight:800}}.art{{height:210px;margin:22px 0;border-radius:28px;overflow:hidden;position:relative;background:#0a2038}}.art img{{width:100%;height:100%;object-fit:cover;animation:float 8s ease-in-out infinite alternate}}.art:after{{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,#071a3b66)}}@keyframes float{{to{{transform:scale(1.07) translateY(-4px)}}}}h1{{font-size:38px;line-height:1.05}}p,li{{color:#b9cce1;line-height:1.6}}li{{margin:12px 0}}a.button,button{{display:block;width:100%;padding:18px;border:0;border-radius:17px;background:#48b4ff;color:#041e35;font-size:17px;font-weight:800;text-align:center;text-decoration:none}}code{{display:block;overflow-wrap:anywhere;padding:22px;background:#11283f;border-radius:18px;margin:20px 0}}.small{{font-size:12px}}@media(prefers-reduced-motion:reduce){{.art img{{animation:none}}}}</style><main><div class="brand">RANDY MOD / DEVICE ID</div><div class="art"><img src="/brand/cover" alt="Randy Mod"></div>{result}</main></html>'''.encode()
@@ -93,19 +100,23 @@ class UDIDService:
             fresh = self.db.complete_udid_session(token, udid, model)
             if not fresh and row["udid"] != udid:
                 raise ValueError("La sesión ya fue utilizada")
-        except (ValueError, OSError, subprocess.TimeoutExpired, plistlib.InvalidFileException):
+        except (ValueError, OSError, subprocess.TimeoutExpired, plistlib.InvalidFileException) as exc:
+            log.warning("UDID callback rejected: %s", type(exc).__name__)
             handler.send_error(400, "No pude leer el UDID. Solicita otro enlace en el bot.")
             return True
         if fresh:
             async def notify():
                 try:
-                    await self.bot.send_message(row["user_id"], f"✅ Tu UDID está listo\nEquipo: {html.escape(model)}\n<code>{udid}</code>\nCópialo y envíalo al registro de tu certificado.", parse_mode="HTML")
+                    await self.bot.send_message(row["user_id"], f"✅ Tu UDID está listo\nEquipo: {html.escape(model)}\n<code>{udid}</code>\nToca Continuar para usarlo en tu registro o consulta.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Continuar con este UDID", callback_data=f"udid:use:{token}")]]))
                 except Exception:
                     # Result remains available in the private page if Telegram fails.
                     pass
             asyncio.run_coroutine_threadsafe(notify(), self.loop)
-        handler.send_response(303)
-        handler.send_header("Location", f"/udid/{token}")
+        # Profile Service uses 301 to hand control back from Settings to Safari.
+        base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+        handler.send_response(301)
+        handler.send_header("Location", f"{base}/udid/{token}")
+        handler.send_header("Content-Length", "0")
         handler.send_header("Cache-Control", "no-store")
         handler.end_headers()
         return True

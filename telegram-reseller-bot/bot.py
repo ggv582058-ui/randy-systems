@@ -31,6 +31,8 @@ from database import Database, InsufficientBalance, NotApproved, NotFound, OutOf
 from health import HealthHandler, start_health_server
 from zentry_api import ZentryClient, ZentryError
 from typography import DeveloperBot, developer_text
+import emoji_style
+from emoji_style import GLOBAL_SLOTS
 
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
@@ -255,6 +257,7 @@ EXTRA_EMOJI_SLOTS = {
     "confirm_purchase": "Confirmar compra",
 }
 MESSAGE_EMOJI_SLOTS = {
+    **GLOBAL_SLOTS,
     "account_title": "Mi cuenta · título", "account_user": "Mi cuenta · usuario",
     "account_rank": "Mi cuenta · rango", "account_balance": "Mi cuenta · saldo",
     "receipt_title": "Entrega de key · título", "receipt_product": "Entrega · producto",
@@ -351,6 +354,9 @@ def certificate_emoji(slot: str) -> str | None:
     except sqlite3.OperationalError:
         value = ""
     return None if value == "-" else value or CERTIFICATE_EMOJI_DEFAULTS.get(slot) or None
+
+
+emoji_style.resolve_icon = certificate_emoji
 
 
 def certificate_menu(language: str, custom_icons: bool = False):
@@ -601,6 +607,10 @@ async def choose_language(update: Update) -> None:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = getattr(context, "args", None) or []
+    if args and args[0].startswith("udid_"):
+        await use_captured_udid(update, context, args[0][5:])
+        return
     context.user_data.clear()
     await send_home(update, context)
 
@@ -879,6 +889,19 @@ async def ask_certificate_device(message) -> None:
             InlineKeyboardButton("▣ iPad", callback_data="certdevice:ipad"),
         ]]),
     )
+
+
+async def use_captured_udid(update, context, token):
+    row = db.udid_session(token)
+    if not row or row["user_id"] != update.effective_user.id or not row["udid"]:
+        await update.effective_message.reply_text("Este enlace expiró o pertenece a otra cuenta. Obtén uno nuevo desde Obtener mi UDID.")
+        return
+    await reply_with_icons(update.effective_message,
+        f"🆔 <b>Tu dispositivo</b>\nEquipo: {html.escape(row['model'] or 'iPhone / iPad')}\nUDID: <code>{html.escape(row['udid'])}</code>")
+    if context.user_data.get("flow", {}).get("name") in ("certificate_udid", "certificate_lookup_udid"):
+        await handle_flow(update, context, text_override=row["udid"])
+    else:
+        await update.effective_message.reply_text("Tu UDID está listo. Puedes usarlo al registrar tu certificado.")
 
 
 async def begin_udid_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1449,12 +1472,12 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await send_home(update, context)
 
 
-async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, text_override: str | None = None) -> bool:
     flow = context.user_data.get("flow")
     if not flow:
         return False
     message = update.effective_message
-    text = (message.text or "").strip()
+    text = text_override if text_override is not None else (message.text or "").strip()
 
     if flow["name"] == "certificate_key":
         row = db.certificate_key(message.from_user.id, text)
@@ -1522,17 +1545,17 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         if not valid_udid(text):
             await message.reply_text("❌ UDID inválido.")
             return True
-        rows = db.certificate_orders_for_user(message.from_user.id, text.upper())
+        rows = db.certificate_orders_for_user(update.effective_user.id, text.upper())
         context.user_data.pop("flow", None)
         if not rows:
             await reply_certificate_menu(message, "🔍 No encontré certificados tuyos para ese UDID.",
                                          language_of(current_user(update)))
             return True
         for index, row in enumerate(rows[:5]):
-            row = db.renew_certificate_link(row["id"], message.from_user.id, settings.certificate_link_ttl_hours)
+            row = db.renew_certificate_link(row["id"], update.effective_user.id, settings.certificate_link_ttl_hours)
             if row["provider_order_code"] and row["status"] not in ("failed", "cancelled"):
                 await refresh_certificate_order(context.bot, row)
-                row = db.certificate_order(row["id"], message.from_user.id)
+                row = db.certificate_order(row["id"], update.effective_user.id)
             buttons = certificate_file_buttons(row)
             cover = (db.certificate_offer_photo() or randy_cover()) if index == 0 and row["status"] != "completed" else None
             if cover:
@@ -2162,6 +2185,10 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = current_user(update)
     data = query.data or ""
     admin_panel = panel(context) == "admin"
+    if data.startswith("udid:use:"):
+        await query.answer()
+        await use_captured_udid(update, context, data.split(":", 2)[2])
+        return
     if data == "noop":
         await query.answer()
         return
@@ -2531,16 +2558,31 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 ] + [
                     [InlineKeyboardButton("Entrega, instalación y compra", callback_data="certemoji:group:actions")],
                     [InlineKeyboardButton("Mensajes · cuenta y keys", callback_data="certemoji:group:messages")],
+                    [InlineKeyboardButton("Emojis generales · todo el bot", callback_data="certemoji:group:general:0")],
                     [InlineKeyboardButton("GBox", callback_data="certemoji:set:gbox"),
                      InlineKeyboardButton("ESign", callback_data="certemoji:set:esign")],
                 ]))
         elif data.startswith("certemoji:group:"):
             group = data.rsplit(":", 1)[-1]
+            if data.startswith("certemoji:group:general:"):
+                page = max(0, min(2, int(group))) if group.isdigit() else 0
+                entries = list(GLOBAL_SLOTS.items())
+                buttons = [[InlineKeyboardButton(label, callback_data=f"certemoji:set:{slot}")]
+                           for slot, label in entries[page * 20:(page + 1) * 20]]
+                navigation = []
+                if page:
+                    navigation.append(InlineKeyboardButton("Anterior", callback_data=f"certemoji:group:general:{page-1}"))
+                if (page + 1) * 20 < len(entries):
+                    navigation.append(InlineKeyboardButton("Siguiente", callback_data=f"certemoji:group:general:{page+1}"))
+                if navigation:
+                    buttons.append(navigation)
+                await query.message.reply_text("Elige el símbolo que quieres reemplazar en los mensajes y botones. Los emojis específicos de cada opción tienen prioridad.", reply_markup=InlineKeyboardMarkup(buttons))
+                return
             if group in ("actions", "messages"):
                 await query.message.reply_text("Elige un botón de la entrega o compra:",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton(label, callback_data=f"certemoji:set:{slot}")]
-                        for slot, label in (EXTRA_EMOJI_SLOTS if group == "actions" else MESSAGE_EMOJI_SLOTS).items()
+                        for slot, label in (EXTRA_EMOJI_SLOTS if group == "actions" else {key: value for key, value in MESSAGE_EMOJI_SLOTS.items() if key not in GLOBAL_SLOTS}).items()
                     ]))
                 return
             if group not in EMOJI_MENU_GROUPS:

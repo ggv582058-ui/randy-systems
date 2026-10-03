@@ -10,6 +10,8 @@ import re
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import ExtBot
+from telegram.error import BadRequest
+from emoji_style import decorate_data, without_custom_icons
 
 
 _TOKEN = re.compile(
@@ -101,12 +103,19 @@ class DeveloperBot(ExtBot):
             "senddocument", "sendaudio", "sendvoice", "editmessagecaption",
             "answercallbackquery", "copymessage", "editmessagereplymarkup", "sendsticker",
         }:
-            data = dict(data)
+            data = decorate_data(data)
             for field, limit in (("text", 200 if endpoint.lower() == "answercallbackquery" else 4096),
                                  ("caption", 1024)):
-                if isinstance(data.get(field), str):
+                if isinstance(data.get(field), str) and not data.get("entities" if field == "text" else "caption_entities"):
                     original = data[field]
                     data[field] = _within_limit(developer_text(original), original, limit)
             if data.get("reply_markup"):
                 data["reply_markup"] = style_markup(data["reply_markup"])
-        return await super()._post(endpoint, data, **kwargs)
+        try:
+            return await super()._post(endpoint, data, **kwargs)
+        except BadRequest as exc:
+            if data and any(word in str(exc).lower() for word in ("emoji", "icon")):
+                fallback = without_custom_icons(data)
+                if fallback != data:
+                    return await super()._post(endpoint, fallback, **kwargs)
+            raise

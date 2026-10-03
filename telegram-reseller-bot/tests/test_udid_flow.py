@@ -1,4 +1,7 @@
 import plistlib
+import io
+from types import SimpleNamespace
+from unittest.mock import MagicMock, AsyncMock
 import subprocess
 import tempfile
 import unittest
@@ -58,6 +61,21 @@ class UDIDTests(unittest.TestCase):
                 input=plistlib.dumps({"UDID":value,"PRODUCT":"iPhone17,1","CHALLENGE":"token"}),
                 capture_output=True, check=True).stdout
             self.assertEqual(device_response(signed,"token"), (value,"iPhone17,1"))
+            db=Database(root/"callback.db"); db.initialize(); db.ensure_user(2,"test","Test",False)
+            db.create_udid_session("token",2)
+            client=SimpleNamespace(send_message=AsyncMock(), username="XxResellerbot")
+            service=UDIDService(db,client,None)
+            handler=SimpleNamespace(headers={"Content-Length":str(len(signed))}, rfile=io.BytesIO(signed),
+                send_response=MagicMock(),send_header=MagicMock(),end_headers=MagicMock(),send_error=MagicMock())
+            with patch.dict(os.environ,{"RENDER_EXTERNAL_URL":"https://example.test"}), patch("udid_flow.asyncio.run_coroutine_threadsafe",side_effect=lambda coro,loop: asyncio.run(coro)):
+                self.assertTrue(service.handle_post(handler,"/udid/callback/token"))
+            handler.send_response.assert_called_once_with(301)
+            handler.send_header.assert_any_call("Location","https://example.test/udid/token")
+            self.assertEqual(client.send_message.await_count,1)
+            button=client.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+            self.assertEqual(button.callback_data,"udid:use:token")
+            self.assertEqual(db.udid_session("token")["udid"],value)
+
             with self.assertRaises(ValueError):
                 device_response(signed,"other")
             with self.assertRaises(ValueError):
