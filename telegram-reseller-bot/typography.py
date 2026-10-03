@@ -58,16 +58,26 @@ def _within_limit(value: str, original: str, limit: int) -> str:
     return value if len(value.encode("utf-16-le")) // 2 <= limit else original
 
 
+_KEYBOARD_FIELDS = ("request_contact", "request_location", "request_poll", "web_app", "request_chat",
+                    "request_users", "style", "icon_custom_emoji_id", "request_managed_bot", "api_kwargs")
+_INLINE_FIELDS = ("url", "callback_data", "switch_inline_query", "switch_inline_query_current_chat",
+                  "callback_game", "pay", "login_url", "web_app", "switch_inline_query_chosen_chat",
+                  "copy_text", "style", "icon_custom_emoji_id", "api_kwargs")
+
+
+def _button_fields(button, names):
+    return {name: value for name in names if (value := getattr(button, name, None)) is not None}
+
+
 def style_markup(markup):
     if isinstance(markup, ReplyKeyboardMarkup):
         rows = []
         for row in markup.keyboard:
             buttons = []
             for button in row:
-                values = button.to_dict()
-                original = values["text"]
-                values["text"] = _within_limit(developer_text(original), original, 64)
-                buttons.append(KeyboardButton(**values))
+                original = button.text
+                text = _within_limit(developer_text(original), original, 64)
+                buttons.append(KeyboardButton(text, **_button_fields(button, _KEYBOARD_FIELDS)))
             rows.append(buttons)
         options = {key: value for key, value in markup.to_dict().items() if key != "keyboard"}
         return ReplyKeyboardMarkup(rows, **options)
@@ -76,10 +86,9 @@ def style_markup(markup):
         for row in markup.inline_keyboard:
             buttons = []
             for button in row:
-                values = button.to_dict()
-                original = values["text"]
-                values["text"] = _within_limit(developer_text(original), original, 64)
-                buttons.append(InlineKeyboardButton(**values))
+                original = button.text
+                text = _within_limit(developer_text(original), original, 64)
+                buttons.append(InlineKeyboardButton(text, **_button_fields(button, _INLINE_FIELDS)))
             rows.append(buttons)
         return InlineKeyboardMarkup(rows)
     return markup

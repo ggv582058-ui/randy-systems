@@ -6,7 +6,7 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123:TEST_TOKEN")
 os.environ.setdefault("ADMIN_BOT_TOKEN", "456:TEST_TOKEN")
 os.environ.setdefault("ADMIN_IDS", "1")
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 
 import bot
 from typography import DeveloperBot, developer_text, style_markup
@@ -33,6 +33,10 @@ class TypographyTests(unittest.IsolatedAsyncioTestCase):
             InlineKeyboardButton('Ver certificado', callback_data='cert:confirm')]]))
         self.assertEqual(inline.inline_keyboard[0][0].callback_data, 'cert:confirm')
         self.assertIn('𝙑𝙚𝙧', inline.inline_keyboard[0][0].text)
+        web_app = WebAppInfo('https://example.com/private')
+        web_button = style_markup(InlineKeyboardMarkup([[
+            InlineKeyboardButton('Abrir web', web_app=web_app)]]))
+        self.assertIs(web_button.inline_keyboard[0][0].web_app, web_app)
 
     async def test_bot_styles_announcements_and_buttons_before_sending(self):
         client = DeveloperBot('123:TEST_TOKEN')
