@@ -30,6 +30,7 @@ from chungchi_api import ChungChiClient, ChungChiError
 from database import Database, InsufficientBalance, NotApproved, NotFound, OutOfStock, ProductRestricted, StoreError
 from health import HealthHandler, start_health_server
 from zentry_api import ZentryClient, ZentryError
+from typography import DeveloperBot, developer_text
 
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
@@ -305,12 +306,14 @@ def canonical_menu_text(value: str) -> str:
         markup = current_group_markup(group)
         for row in markup.keyboard:
             for button in row:
-                if value == button.text.split(" ", 1)[-1]:
+                if value in (button.text.split(" ", 1)[-1], developer_text(button.text),
+                             developer_text(button.text.split(" ", 1)[-1])):
                     return button.text
     for markup in (USER_MENU_EN, ADMIN_MENU_EN, VIP_ADMIN_MENU_EN, PENDING_MENU_EN, CERTIFICATE_MENU_EN):
         for row in markup.keyboard:
             for button in row:
-                if value == button.text.split(" ", 1)[-1]:
+                if value in (button.text.split(" ", 1)[-1], developer_text(button.text),
+                             developer_text(button.text.split(" ", 1)[-1])):
                     return button.text
     return value
 
@@ -2583,7 +2586,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             media_dir = Path(__file__).resolve().parent / "announcement-media"
             await context.bot.send_media_group(query.from_user.id, media=[
                 InputMediaPhoto(io.BytesIO((media_dir / "aimbot-avatar.jpg").read_bytes()),
-                                caption="👁️ VISTA PREVIA · Solo tú ves esto\n\n" + rows[0]["body"]),
+                                caption=developer_text("👁️ VISTA PREVIA · Solo tú ves esto\n\n" + rows[0]["body"])),
                 InputMediaVideo(io.BytesIO((media_dir / "aimbot-avatar.mp4").read_bytes())),
             ])
         elif action == "refresh":
@@ -2929,7 +2932,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 def build_application(token: str, panel_name: str) -> Application:
-    app: Application = ApplicationBuilder().token(token).build()
+    app: Application = ApplicationBuilder().bot(DeveloperBot(token=token)).build()
     app.bot_data["panel"] = panel_name
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))
@@ -3013,7 +3016,7 @@ async def daily_announcement_loop(bot, stop_event: asyncio.Event) -> None:
             for target in db.reseller_ids(include_certificates=False):
                 try:
                     await bot.send_media_group(target, media=[
-                        InputMediaPhoto(io.BytesIO(photo), caption=branded_announcement(announcement["body"], caption=True)),
+                        InputMediaPhoto(io.BytesIO(photo), caption=developer_text(branded_announcement(announcement["body"], caption=True))),
                         InputMediaVideo(io.BytesIO(video)),
                     ])
                     sent += 1

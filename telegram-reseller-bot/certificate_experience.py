@@ -125,7 +125,7 @@ async def send_files(tg_bot, order):
                     thumbnail = thumb
             except Exception:
                 log.warning("Logo inválido para %s", kind)
-        documents.append(InputMediaDocument(stream, caption=caption, thumbnail=thumbnail))
+        documents.append(InputMediaDocument(stream, caption=bot.developer_text(caption), thumbnail=thumbnail))
     await tg_bot.send_media_group(order["user_id"], documents)
     await tg_bot.send_message(order["user_id"],
         f"Contraseña P12: <code>{html.escape(str(order['p12_password']))}</code>\n"

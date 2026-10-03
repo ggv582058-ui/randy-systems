@@ -46,7 +46,8 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
             await experience.send_files(client, order)
             await experience.send_app_selector(client, order)
         self.assertEqual([item[0] for item in events], ["message", "documents", "message", "message"])
-        self.assertEqual([item.caption for item in events[1][1][1]], ["P12 · Test User", "Perfil · Test User"])
+        self.assertEqual([item.caption for item in events[1][1][1]],
+                         [bot.developer_text("P12 · Test User"), bot.developer_text("Perfil · Test User")])
         self.assertEqual([item.media.filename for item in events[1][1][1]],
                          ["Test User.p12", "Test User.mobileprovision"])
         self.assertTrue(all(item.thumbnail for item in events[1][1][1]))
