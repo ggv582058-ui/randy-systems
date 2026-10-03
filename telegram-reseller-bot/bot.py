@@ -389,6 +389,38 @@ def format_date(value: str) -> str:
     return datetime.fromisoformat(value).astimezone(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
 
 
+DEFAULT_KEY_RECEIPT_TITLE = "¡GRACIAS POR TU COMPRA!"
+
+
+def key_receipt_text(sale: dict) -> str:
+    title = db.private_setting("key_receipt_title") or DEFAULT_KEY_RECEIPT_TITLE
+    custom_footer = db.private_setting("key_receipt_footer")
+    footer_html = (html.escape(custom_footer) if custom_footer else
+                   "Puedes revisar el tiempo restante cuando quieras en <b>🔑 Mis keys</b>.")
+    return (
+        f"🎉 <b>{html.escape(title)}</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"📦 Producto: <b>{html.escape(sale['product_name'])}</b>\n"
+        f"🔑 Tu key: <code>{html.escape(sale['key'])}</code>\n"
+        f"🧾 Referencia: <code>#{sale['order_id']}</code>\n"
+        f"⏳ Duración: <b>{sale['duration_days']} días</b>\n"
+        f"⌛ Vence: <b>{format_date(sale['expires_at'])}</b>\n"
+        f"💰 Saldo restante: <b>{money(sale['balance_cents'])}</b>\n\n"
+        f"📋 <b>Activación</b>\n{html.escape(sale['instructions'])}\n\n"
+        + footer_html
+    )
+
+
+def key_receipt_preview() -> str:
+    return key_receipt_text({
+        "product_name": "Randy Mod · 30 días", "key": "RANDY-EJEMPLO-1234",
+        "order_id": 123, "duration_days": 30,
+        "expires_at": "2026-11-02T16:00:00+00:00",
+        "balance_cents": 1850,
+        "instructions": "Abre la app y pega tu key para activarla.",
+    })
+
+
 def remaining_time(expires_at: str) -> tuple[str, bool]:
     seconds = int((datetime.fromisoformat(expires_at) - datetime.now(timezone.utc)).total_seconds())
     if seconds <= 0:
@@ -1261,6 +1293,7 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 [InlineKeyboardButton("🍎 Portada del certificado", callback_data="certcover:upload")],
                 [InlineKeyboardButton("🖼️ Logos · GBox / ESign / archivos", callback_data="certlogos:menu")],
                 [InlineKeyboardButton("🎭 Editar emojis de todos los menús", callback_data="certemoji:menu")],
+                [InlineKeyboardButton("💎 Mensaje de entrega de keys", callback_data="keyreceipt:menu")],
                 [InlineKeyboardButton("ID de emoji Premium", callback_data="certemoji:get")],
                 [InlineKeyboardButton("📱 IPA para instalar · GBox / ESign", callback_data="certipa:menu")],
             ]),
@@ -1644,6 +1677,21 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         db.set_certificate_logo(kind, data)
         context.user_data.pop("flow", None)
         await message.reply_text(f"✅ Logo de {kind} guardado para el certificado y la web.", reply_markup=style_menu(ADMIN_MENU, "admin"))
+        return True
+
+    if flow["name"] == "key_receipt_edit":
+        field = flow["field"]
+        value = (message.text or "").strip()
+        limit = 70 if field == "title" else 300
+        if not value or len(value) > limit:
+            await message.reply_text(f"Envía un texto de 1 a {limit} caracteres. Usa /start para cancelar.")
+            return True
+        key = "key_receipt_title" if field == "title" else "key_receipt_footer"
+        db.set_private_setting(key, value)
+        context.user_data.pop("flow", None)
+        await message.reply_text("✅ Mensaje actualizado. Así verá la entrega el comprador:")
+        await message.reply_text(key_receipt_preview(), parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✏️ Seguir editando", callback_data="keyreceipt:menu")]]))
         return True
 
     if flow["name"] == "certificate_emoji_assign":
@@ -2218,6 +2266,39 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 pass
         return
 
+    if data.startswith("keyreceipt:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        await query.answer()
+        action = data.split(":")
+        if action[1] == "menu":
+            await query.message.reply_text(
+                "💎 <b>ENTREGA DE KEYS</b>\nEdita el título y el texto final. La key, el producto, "
+                "el vencimiento y el saldo se agregan solos. Prueba la vista previa antes de usarlo.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✏️ Título", callback_data="keyreceipt:edit:title"),
+                     InlineKeyboardButton("✏️ Texto final", callback_data="keyreceipt:edit:footer")],
+                    [InlineKeyboardButton("👁️ Vista previa", callback_data="keyreceipt:preview")],
+                    [InlineKeyboardButton("↩️ Restaurar texto original", callback_data="keyreceipt:reset")],
+                ]))
+        elif action[1] == "edit" and len(action) == 3 and action[2] in ("title", "footer"):
+            field = action[2]
+            context.user_data["flow"] = {"name": "key_receipt_edit", "field": field}
+            await query.message.reply_text(
+                "Escribe el nuevo título (máximo 70 caracteres):" if field == "title"
+                else "Escribe el texto final de la entrega (máximo 300 caracteres):")
+        elif action[1] == "preview":
+            await query.message.reply_text("👁️ <b>Ejemplo para un comprador</b>\n\n" + key_receipt_preview(),
+                parse_mode=ParseMode.HTML)
+        elif action[1] == "reset":
+            db.set_private_setting("key_receipt_title", "")
+            db.set_private_setting("key_receipt_footer", "")
+            await query.message.reply_text("✅ Texto original restaurado.\n\n" + key_receipt_preview(),
+                parse_mode=ParseMode.HTML)
+        return
+
     if data in ("media:products", "certcover:upload"):
         if not admin_panel or not is_admin(query.from_user.id):
             await query.answer("Solo Admin", show_alert=True)
@@ -2676,19 +2757,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text(
-            "🎉 <b>¡GRACIAS POR TU COMPRA!</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            f"📦 Producto: <b>{html.escape(sale['product_name'])}</b>\n"
-            f"🔑 Tu key: <code>{html.escape(sale['key'])}</code>\n"
-            f"🧾 Referencia: <code>#{sale['order_id']}</code>\n"
-            f"⏳ Duración: <b>{sale['duration_days']} días</b>\n"
-            f"⌛ Vence: <b>{format_date(sale['expires_at'])}</b>\n"
-            f"💰 Saldo restante: <b>{money(sale['balance_cents'])}</b>\n\n"
-            f"📋 <b>Activación</b>\n{html.escape(sale['instructions'])}\n\n"
-            "Puedes revisar el tiempo restante cuando quieras en <b>🔑 Mis keys</b>.",
-            parse_mode=ParseMode.HTML,
-        )
+        await query.message.reply_text(key_receipt_text(sale), parse_mode=ParseMode.HTML)
         if sale["file"]:
             try:
                 stream = io.BytesIO(sale["file"]["file_data"])
