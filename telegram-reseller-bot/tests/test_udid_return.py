@@ -8,6 +8,12 @@ os.environ.setdefault('ADMIN_IDS','1')
 import bot
 
 class UDIDReturnTests(unittest.IsolatedAsyncioTestCase):
+    def test_entry_uses_miniapp_not_internal_browser_link(self):
+        with patch.dict(os.environ,{'RENDER_EXTERNAL_URL':'https://example.test'}), patch.object(bot.db,'create_udid_session'):
+            button=bot.udid_buttons(2).inline_keyboard[0][0]
+        self.assertIsNone(button.url)
+        self.assertTrue(button.web_app.url.startswith('https://example.test/udid/'))
+
     async def test_return_keeps_pending_registration_and_supplies_udid(self):
         message=SimpleNamespace(reply_text=AsyncMock())
         update=SimpleNamespace(effective_user=SimpleNamespace(id=2),effective_message=message)

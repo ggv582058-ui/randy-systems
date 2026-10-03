@@ -34,8 +34,19 @@ class UDIDTests(unittest.TestCase):
                         page=response.read().decode()
                     self.assertIn("Obtener mi UDID",page)
                     self.assertIn("/udid/profile/private",page)
+                    self.assertIn("tg.openLink(",page)
+                    self.assertIn("try_browser:'safari'",page)
+                    self.assertIn('onclick="getProfile(event)"',page)
                     with urlopen(base+"/udid/profile/private") as response:
+                        self.assertEqual(response.headers.get_content_type(),"application/x-apple-aspen-config")
+                        self.assertIsNone(response.headers.get("Content-Disposition"))
                         self.assertEqual(plistlib.loads(response.read())["PayloadContent"]["Challenge"],"private")
+                    db.complete_udid_session("private","00008101-001C6D642268801E","iPhone17,1")
+                    with urlopen(base+"/udid/private") as response:
+                        result=response.read().decode()
+                    self.assertIn("tg://resolve?domain=XxResellerbot&start=udid_private",result)
+                    self.assertIn("const captured=true",result)
+                    self.assertIn("Continuar en Telegram",result)
                     with self.assertRaises(HTTPError) as failure:
                         urlopen(base+"/udid/unknown")
                     self.assertEqual(failure.exception.code,404)

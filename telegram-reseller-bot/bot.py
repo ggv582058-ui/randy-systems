@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, KeyboardButton, MessageEntity, ReplyKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, KeyboardButton, MessageEntity, ReplyKeyboardMarkup, Update, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
@@ -918,7 +918,7 @@ def udid_buttons(user_id: int):
         return None
     token = secrets.token_urlsafe(32)
     db.create_udid_session(token, user_id)
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🆔 Obtener mi UDID · Safari", url=f"{base}/udid/{token}")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🆔 Obtener mi UDID", web_app=WebAppInfo(f"{base}/udid/{token}"))]])
 
 
 async def show_certificate_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, language: str) -> None:
