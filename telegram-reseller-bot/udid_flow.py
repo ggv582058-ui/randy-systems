@@ -70,35 +70,47 @@ class UDIDService:
             username = getattr(self.bot, "username", None) or "XxResellerbot"
             back = f"https://t.me/{username}?start=udid_{token}"
             native_back = f"tg://resolve?domain={username}&start=udid_{token}"
-            navigation = f'''<script src="https://telegram.org/js/telegram-web-app.js"></script><script>
-const tg=window.Telegram&&window.Telegram.WebApp;
-if(tg&&tg.initData){{tg.ready();tg.expand();}}
+            navigation = f'''<script>
+const getTG=()=>window.Telegram&&window.Telegram.WebApp;
+const miniApp=!!(getTG()&&getTG().initData)||new URLSearchParams(location.hash.slice(1)).has('tgWebAppData');
+function readyMiniApp(){{const tg=getTG();if(tg&&tg.initData){{tg.ready();}}}}
+if(miniApp&&!getTG()){{
+ const sdk=document.createElement('script');sdk.src='https://telegram.org/js/telegram-web-app.js';sdk.async=true;sdk.onload=readyMiniApp;document.head.appendChild(sdk);
+}}else{{readyMiniApp();}}
 function getProfile(event){{
-  if(tg&&tg.initData){{
+  const tg=getTG();
+  if(miniApp){{
     event.preventDefault();
+    if(!tg||!tg.initData){{const note=document.getElementById('next-step');note.hidden=false;note.textContent='Preparando Safari… vuelve a tocar el botón en un instante.';return;}}
     tg.openLink(new URL('/udid/{token}?safari=1',location.origin).href,{{try_browser:'safari'}});
-    document.getElementById('next-step').hidden=false;
+    tg.close();
   }}
 }}
 function returnToBot(event){{
+  const tg=getTG();
   if(tg&&tg.initData){{event.preventDefault();tg.openTelegramLink({json.dumps(back)});tg.close();}}
 }}
+function copyUDID(){{
+ const value=document.getElementById('udid').textContent;
+ navigator.clipboard.writeText(value).then(()=>{{document.getElementById('copy').textContent='UDID copiado ✓';}}).catch(()=>{{document.getElementById('copy').textContent='Mantén pulsado el UDID para copiar';}});
+}}
+document.addEventListener('visibilitychange',()=>{{document.documentElement.classList.toggle('paused',document.hidden);}});
 const captured={str(bool(udid)).lower()};
-if(!captured&&!(tg&&tg.initData)&&new URLSearchParams(location.search).get('safari')==='1'){{
+if(!captured&&!miniApp&&new URLSearchParams(location.search).get('safari')==='1'){{
   let downloaded=false;
   try{{downloaded=sessionStorage.getItem('downloaded:{token}')==='1';sessionStorage.setItem('downloaded:{token}','1');}}catch(error){{}}
-  if(!downloaded)setTimeout(()=>{{location.href='/udid/profile/{token}';}},1200);
+  if(!downloaded)setTimeout(()=>{{location.href='/udid/profile/{token}';}},400);
 }}
-if(captured&&!(tg&&tg.initData)){{
+if(captured&&!miniApp){{
   let tried=false;
   try{{tried=sessionStorage.getItem('returned:{token}')==='1';sessionStorage.setItem('returned:{token}','1');}}catch(error){{}}
-  if(!tried)setTimeout(()=>{{location.href={json.dumps(native_back)};}},700);
+  if(!tried)setTimeout(()=>{{location.href={json.dumps(native_back)};}},250);
 }}
 </script>'''
-            result = (f'<h2>Tu UDID está listo</h2><p>Equipo: {html.escape(row["model"] or "iPhone / iPad")}</p><code id="udid">{udid}</code><button onclick="navigator.clipboard.writeText(document.getElementById(\'udid\').textContent)">Copiar UDID</button><a class="button" onclick="returnToBot(event)" href="{back}">Continuar en Telegram ↗</a><p>Tu UDID se guarda en tu sesión. Puedes quitar el perfil de Ajustes.</p>'
+            result = (f'<h2>Tu UDID está listo</h2><p>Equipo: {html.escape(row["model"] or "iPhone / iPad")}</p><code id="udid">{udid}</code><button id="copy" class="secondary" onclick="copyUDID()">Copiar UDID</button><a class="button" onclick="returnToBot(event)" href="{back}">Continuar en Telegram ↗</a><p>Tu UDID se guarda en tu sesión. Puedes quitar el perfil de Ajustes.</p>'
                       if udid else f'<h1>Tu equipo.<br>Tu certificado.</h1><p>Obtén el UDID de este iPhone o iPad para registrar tu certificado.</p><a class="button" onclick="getProfile(event)" href="/udid/profile/{token}">Obtener mi UDID ↗</a><p id="next-step" hidden>En Safari, toca Permitir. Después abre Ajustes → Perfil descargado → Instalar.</p><ol><li>Toca Obtener mi UDID y permite la descarga en Safari.</li><li>Ajustes → Perfil descargado → Instalar.</li><li>Vuelve aquí. El UDID también llegará a Telegram.</li></ol><p class="small">El perfil solicita UDID y modelo. Se vinculan a tu cuenta durante 30 minutos. No configura administración remota. Puedes quitarlo después.</p>')
             payload = f'''<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Randy Mod · UDID</title><style>
-*{{box-sizing:border-box}}body{{margin:0;background:radial-gradient(ellipse at 50% 15%,#0c4d8566,transparent 60%),#030b18;color:#edf8ff;font:16px system-ui}}main{{max-width:640px;margin:auto;padding:24px;position:relative;z-index:1}}.brand{{text-shadow:0 0 18px #3fa9ff;letter-spacing:3px;color:#78baff;font-size:12px;font-weight:800}}.art{{height:210px;margin:22px 0;border-radius:28px;overflow:hidden;position:relative;background:#0a2038}}.art img{{width:100%;height:100%;object-fit:cover;animation:float 8s ease-in-out infinite alternate}}.art:after{{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,#071a3b66)}}@keyframes float{{to{{transform:scale(1.07) translateY(-4px)}}}}h1{{font-size:38px;line-height:1.05}}p,li{{color:#b9cce1;line-height:1.6}}li{{margin:12px 0}}a.button,button{{display:block;width:100%;padding:18px;border:0;border-radius:17px;background:#48b4ff;color:#041e35;font-size:17px;font-weight:800;text-align:center;text-decoration:none}}code{{display:block;overflow-wrap:anywhere;padding:22px;background:#11283f;border-radius:18px;margin:20px 0}}.small{{font-size:12px}}.art{{box-shadow:0 0 40px #008cfa44;border:1px solid #459ffb66}}body:before{{content:"";position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(#2486c911 1px,transparent 1px),linear-gradient(90deg,#2486c911 1px,transparent 1px);background-size:34px 34px;mask-image:linear-gradient(transparent,#000)}}.code-side{{position:fixed;top:0;bottom:0;width:70px;overflow:hidden;pointer-events:none;color:#36a8ff;opacity:.22;font:11px/2.3 monospace;white-space:pre-wrap;overflow-wrap:anywhere}}.code-side.left{{left:0}}.code-side.right{{right:0}}.code-side span{{display:block;animation:code-stream 30s linear infinite}}@keyframes code-stream{{from{{transform:translateY(15vh)}}to{{transform:translateY(-60vh)}}}}@media(prefers-reduced-motion:reduce){{.art img,.code-side span{{animation:none}}}}</style><div class="code-side left" aria-hidden="true"><span>const randy = {{
+*{{box-sizing:border-box}}body{{margin:0;background:radial-gradient(ellipse at 50% 15%,#0c4d8566,transparent 60%),#030b18;color:#edf8ff;font:16px system-ui}}main{{max-width:640px;margin:auto;padding:24px;position:relative;z-index:1}}.brand{{text-shadow:0 0 18px #3fa9ff;letter-spacing:3px;color:#78baff;font-size:12px;font-weight:800}}.art{{height:210px;margin:22px 0;border-radius:28px;overflow:hidden;position:relative;background:#0a2038}}.art img{{width:100%;height:100%;object-fit:cover;animation:float 12s ease-in-out infinite alternate;will-change:transform}}.art:after{{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,#071a3b66)}}@keyframes float{{to{{transform:scale(1.07) translateY(-4px)}}}}h1{{font-size:38px;line-height:1.05}}p,li{{color:#b9cce1;line-height:1.6}}li{{margin:12px 0}}a.button,button{{display:block;width:100%;position:relative;overflow:hidden;margin:12px 0;padding:18px;border:1px solid #a6e2ff77;border-radius:20px;background:linear-gradient(135deg,#61baff55,#126da844 50%,#12477966);color:#effaff;box-shadow:inset 0 1px 0 #ffffff66,inset 0 -1px 0 #174b8188,0 12px 28px #0004;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);touch-action:manipulation;transition:transform .15s;font-size:17px;font-weight:800;text-align:center;text-decoration:none}}a.button:before,button:before{{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,#fff2,transparent 40%,transparent 65%,#ffffff10)}}a.button:active,button:active{{transform:scale(.985)}}button.secondary{{background:linear-gradient(135deg,#6388ac22,#0d264955);border-color:#8bbbe744}}code{{display:block;overflow-wrap:anywhere;padding:22px;background:linear-gradient(140deg,#214c7655,#081d3588);border:1px solid #79b9e54d;border-radius:18px;margin:20px 0}}.small{{font-size:12px}}.art{{box-shadow:0 16px 40px #0005,0 0 24px #008cfa28;border:1px solid #459ffb66}}body:before{{content:"";position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(#2486c911 1px,transparent 1px),linear-gradient(90deg,#2486c911 1px,transparent 1px);background-size:34px 34px;mask-image:linear-gradient(transparent,#000)}}.code-side{{position:fixed;top:0;bottom:0;width:70px;overflow:hidden;pointer-events:none;color:#36a8ff;opacity:.22;font:11px/2.3 monospace;white-space:pre-wrap;overflow-wrap:anywhere}}.code-side.left{{left:0}}.code-side.right{{right:0}}.code-side span{{display:block;animation:code-stream 40s linear infinite;will-change:transform}}@keyframes code-stream{{from{{transform:translateY(15vh)}}to{{transform:translateY(-60vh)}}}}.paused .art img,.paused .code-side span{{animation-play-state:paused}}@media(prefers-reduced-motion:reduce){{.art img,.code-side span{{animation:none}}}}</style><div class="code-side left" aria-hidden="true"><span>const randy = {{
  device: 'iOS',
  udid: 'ready',
  style: 'robotic'

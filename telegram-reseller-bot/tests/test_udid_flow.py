@@ -1,5 +1,8 @@
 import plistlib
 import io
+import re
+import json
+import shutil
 from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock
 import subprocess
@@ -55,6 +58,27 @@ class UDIDTests(unittest.TestCase):
                     self.assertEqual(failure.exception.code,404)
             finally:
                 server.shutdown();server.server_close();thread.join();loop.close()
+
+    @unittest.skipUnless(shutil.which("node"), "Node is required for browser script simulation")
+    def test_miniapp_closes_after_safari_launch_and_safari_does_not_load_sdk(self):
+        for captured in (False, True):
+            row={"udid":"00008101-001C6D642268801E" if captured else None,"model":"iPhone17,1"}
+            service=UDIDService(SimpleNamespace(udid_session=lambda token:row),SimpleNamespace(username="XxResellerbot"),None)
+            handler=SimpleNamespace(wfile=io.BytesIO(),send_response=MagicMock(),send_header=MagicMock(),end_headers=MagicMock())
+            service.handle_get(handler,"/udid/private")
+            script=re.findall(r"<script>(.*?)</script>",handler.wfile.getvalue().decode(),re.S)[0]
+            for miniapp in (False,True):
+                harness="""
+const vm=require('node:vm'),assert=require('node:assert');const calls=[];
+const tg={initData:MINI?'query':'',ready(){},openLink(url){calls.push(['open',url]);},close(){calls.push(['close']);}};
+const context={window:{Telegram:{WebApp:tg}},location:{origin:'https://example.test',search:'?safari=1',hash:''},URL,URLSearchParams,
+ document:{getElementById(){return {hidden:true}},addEventListener(){},head:{appendChild(){throw Error('Safari must not fetch SDK')} }},
+ sessionStorage:{getItem(){return null},setItem(){}},setTimeout(fn){fn()}};
+vm.createContext(context);vm.runInContext(SCRIPT,context);
+if(MINI&&!CAPTURED){context.getProfile({preventDefault(){}});assert.equal(calls[0][0],'open');assert.equal(calls[0][1],'https://example.test/udid/private?safari=1');assert.equal(calls[1][0],'close');}
+if(!MINI){assert.equal(context.location.href,CAPTURED?'tg://resolve?domain=XxResellerbot&start=udid_private':'/udid/profile/private');}
+""".replace("MINI",str(miniapp).lower()).replace("CAPTURED",str(captured).lower()).replace("SCRIPT",json.dumps(script))
+                subprocess.run(["node","-e",harness],check=True,capture_output=True)
 
     def test_profile_requests_only_udid_and_model_with_private_challenge(self):
         payload = plistlib.loads(profile("https://example.test", "private-token"))
