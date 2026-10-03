@@ -164,8 +164,30 @@ def is_vip_row(user) -> bool:
     return bool(user and user["role"] == "reseller" and user["tier"] == "vip")
 
 
-def user_menu(language: str):
-    return style_menu(USER_MENU_EN if language == "en" else USER_MENU, "seller")
+CERTIFICATE_MENU_ACTIONS = {"ios", "use_key", "my_certificate", "check_udid", "settings",
+                            "balance", "account", "support", "language"}
+PRODUCT_MENU_ACTIONS = {"settings", "buy", "balance", "my_keys", "lookup_key",
+                        "account", "history", "support", "language"}
+
+
+def access_scope(user) -> str:
+    return user["access_scope"] if user and "access_scope" in user.keys() else "all"
+
+
+def scope_allows(user, section: str) -> bool:
+    return not user or user["role"] == "admin" or access_scope(user) in ("all", section)
+
+
+def user_menu(language: str, scope: str = "all"):
+    markup = USER_MENU_EN if language == "en" else USER_MENU
+    styled = style_menu(markup, "seller")
+    if scope == "all":
+        return styled
+    allowed = CERTIFICATE_MENU_ACTIONS if scope == "certificates" else PRODUCT_MENU_ACTIONS
+    rows = [[button for column, button in enumerate(row)
+             if menu_slot("seller", row_number, column).removeprefix("seller_") in allowed]
+            for row_number, row in enumerate(styled.keyboard)]
+    return ReplyKeyboardMarkup([row for row in rows if row], resize_keyboard=True)
 
 
 EMOJI_MENU_GROUPS = {
@@ -230,6 +252,15 @@ EXTRA_EMOJI_SLOTS = {
     "open_esign": "Abrir ESign",
     "confirm_purchase": "Confirmar compra",
 }
+MESSAGE_EMOJI_SLOTS = {
+    "account_title": "Mi cuenta · título", "account_user": "Mi cuenta · usuario",
+    "account_rank": "Mi cuenta · rango", "account_balance": "Mi cuenta · saldo",
+    "receipt_title": "Entrega de key · título", "receipt_product": "Entrega · producto",
+    "receipt_key": "Entrega · key", "receipt_reference": "Entrega · referencia",
+    "receipt_duration": "Entrega · duración", "receipt_expiry": "Entrega · vencimiento",
+    "receipt_balance": "Entrega · saldo", "receipt_activation": "Entrega · activación",
+    "certificate_paid": "Certificado · key entregada",
+}
 
 
 def menu_slot(group: str, row: int, column: int) -> str:
@@ -247,7 +278,7 @@ def menu_button_label(slot: str) -> str:
             for column, button in enumerate(buttons):
                 if slot == menu_slot(group, row, column):
                     return f"{group_label} · {button.text}"
-    return EXTRA_EMOJI_SLOTS.get(slot, {"gbox": "GBox", "esign": "ESign"}.get(slot, slot))
+    return (EXTRA_EMOJI_SLOTS | MESSAGE_EMOJI_SLOTS).get(slot, {"gbox": "GBox", "esign": "ESign"}.get(slot, slot))
 
 
 def emoji_button(label: str, slot: str, **kwargs) -> InlineKeyboardButton:
@@ -295,7 +326,7 @@ CERTIFICATE_EMOJI_DEFAULTS = {
 
 
 def certificate_emoji(slot: str) -> str | None:
-    if slot not in CERTIFICATE_EMOJI_DEFAULTS and slot not in EXTRA_EMOJI_SLOTS and not any(
+    if slot not in CERTIFICATE_EMOJI_DEFAULTS and slot not in EXTRA_EMOJI_SLOTS and slot not in MESSAGE_EMOJI_SLOTS and not any(
         slot == menu_slot(group, row, column)
         for group in EMOJI_MENU_GROUPS
         for markup in (current_group_markup(group),)
@@ -389,7 +420,28 @@ def format_date(value: str) -> str:
     return datetime.fromisoformat(value).astimezone(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
 
 
-DEFAULT_KEY_RECEIPT_TITLE = "¡GRACIAS POR TU COMPRA!"
+DEFAULT_KEY_RECEIPT_TITLE = "𝙍𝘼𝙉𝘿𝙔 𝙈𝙊𝘿 // 𝙆𝙀𝙔 𝘼𝘾𝙏𝙄𝙑𝘼𝘿𝘼"
+ANNOUNCEMENT_HEADING = "𝙍𝘼𝙉𝘿𝙔 𝙈𝙊𝘿 // 𝘼𝙑𝙄𝙎𝙊"
+
+
+def branded_announcement(body: str, caption: bool = False) -> str:
+    header = ANNOUNCEMENT_HEADING + "\n\n"
+    return header + body if len(header + body) <= (1024 if caption else 4096) else body
+
+
+def message_icon(slot: str, fallback: str) -> str:
+    emoji_id = certificate_emoji(slot)
+    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>' if emoji_id else fallback
+
+
+async def reply_with_icons(message, body: str, **kwargs):
+    try:
+        return await message.reply_text(body, parse_mode=ParseMode.HTML, **kwargs)
+    except BadRequest as exc:
+        if "emoji" not in str(exc).lower():
+            raise
+        return await message.reply_text(re.sub(r'<tg-emoji[^>]*>(.*?)</tg-emoji>', r'\1', body),
+                                        parse_mode=ParseMode.HTML, **kwargs)
 
 
 def key_receipt_text(sale: dict) -> str:
@@ -398,15 +450,15 @@ def key_receipt_text(sale: dict) -> str:
     footer_html = (html.escape(custom_footer) if custom_footer else
                    "Puedes revisar el tiempo restante cuando quieras en <b>🔑 Mis keys</b>.")
     return (
-        f"🎉 <b>{html.escape(title)}</b>\n"
+        f"{message_icon('receipt_title', '🎉')} <b>{html.escape(title)}</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        f"📦 Producto: <b>{html.escape(sale['product_name'])}</b>\n"
-        f"🔑 Tu key: <code>{html.escape(sale['key'])}</code>\n"
-        f"🧾 Referencia: <code>#{sale['order_id']}</code>\n"
-        f"⏳ Duración: <b>{sale['duration_days']} días</b>\n"
-        f"⌛ Vence: <b>{format_date(sale['expires_at'])}</b>\n"
-        f"💰 Saldo restante: <b>{money(sale['balance_cents'])}</b>\n\n"
-        f"📋 <b>Activación</b>\n{html.escape(sale['instructions'])}\n\n"
+        f"{message_icon('receipt_product', '📦')} Producto: <b>{html.escape(sale['product_name'])}</b>\n"
+        f"{message_icon('receipt_key', '🔑')} Tu key: <code>{html.escape(sale['key'])}</code>\n"
+        f"{message_icon('receipt_reference', '🧾')} Referencia: <code>#{sale['order_id']}</code>\n"
+        f"{message_icon('receipt_duration', '⏳')} Duración: <b>{sale['duration_days']} días</b>\n"
+        f"{message_icon('receipt_expiry', '⌛')} Vence: <b>{format_date(sale['expires_at'])}</b>\n"
+        f"{message_icon('receipt_balance', '💰')} Saldo restante: <b>{money(sale['balance_cents'])}</b>\n\n"
+        f"{message_icon('receipt_activation', '📋')} <b>Activación</b>\n{html.escape(sale['instructions'])}\n\n"
         + footer_html
     )
 
@@ -509,11 +561,11 @@ async def send_home(update: Update, context: ContextTypes.DEFAULT_TYPE, note: st
         await chat.send_message(text, reply_markup=admin_menu(user), parse_mode=ParseMode.HTML)
     elif user["role"] in ("reseller", "admin"):
         rank = "Admin" if user["role"] == "admin" else ("VIP Partner" if is_vip_row(user) and language == "en" else ("Socio VIP" if is_vip_row(user) else ("Regular Partner" if language == "en" else "Socio Regular")))
-        text = note or (f"💎 <b>{html.escape(settings.store_name)}</b>\n━━━━━━━━━━━━━━━━━━\n"
+        text = note or (f"💎 <b>𝙍𝘼𝙉𝘿𝙔 𝙈𝙊𝘿 // 𝙋𝘼𝙉𝙀𝙇</b>\n━━━━━━━━━━━━━━━━━━\n"
                         + (f"👤 Verified: <b>{rank}</b>\n💰 Available balance: <b>{money(user['balance_cents'])}</b>\nChoose an option."
                            if language == "en" else
                            f"👤 Rango: <b>{rank}</b>\n💰 Saldo disponible: <b>{money(user['balance_cents'])}</b>\nSelecciona una opción."))
-        await chat.send_message(text, reply_markup=user_menu(language), parse_mode=ParseMode.HTML)
+        await chat.send_message(text, reply_markup=user_menu(language, access_scope(user)), parse_mode=ParseMode.HTML)
     else:
         if language == "en":
             label = "Your request is waiting for review." if user["requested_access"] else "Request access to become a reseller."
@@ -643,6 +695,7 @@ async def show_partner_manager(message, target: int) -> None:
          InlineKeyboardButton("➖ Quitar saldo", callback_data=f"partner:subtract:{target}")],
         [InlineKeyboardButton("💲 Precio especial", callback_data=f"partner:prices:{target}")],
         [InlineKeyboardButton("🔐 Límites de compra", callback_data=f"partner:limits:{target}")],
+        [InlineKeyboardButton("🧭 Tipo de catálogo", callback_data=f"partner:scope:{target}")],
         [InlineKeyboardButton("💎 Hacer VIP", callback_data=f"partner:tier-vip:{target}"),
          InlineKeyboardButton("👤 Hacer Regular", callback_data=f"partner:tier-regular:{target}")],
         [InlineKeyboardButton("⚠️ Enviar advertencia", callback_data=f"partner:warn:{target}")],
@@ -652,6 +705,7 @@ async def show_partner_manager(message, target: int) -> None:
         f"⚙️ <b>Administrar socio</b>\nNombre: {html.escape(tag)}\n"
         f"Usuario de acceso: <code>{html.escape(login)}</code>\nID: <code>{target}</code>\n"
         f"Rango: <b>{'VIP' if partner['tier'] == 'vip' else 'Regular'}</b>\n"
+        f"Catálogo: <b>{ {'all': 'Todo', 'certificates': 'Solo certificados', 'products': 'Solo productos'}.get(access_scope(partner), 'Todo') }</b>\n"
         f"Saldo: <b>{money(partner['balance_cents'])}</b>",
         reply_markup=keys,
         parse_mode=ParseMode.HTML,
@@ -692,12 +746,14 @@ async def show_account(update: Update) -> None:
     language = language_of(u)
     tag = f"@{u['username']}" if u["username"] else "Sin username"
     rank = "Admin" if u["role"] == "admin" else ("VIP" if is_vip_row(u) else "Regular")
-    await update.effective_message.reply_text(
-        (f"👤 <b>My account</b>\nID: <code>{u['telegram_id']}</code>\nUser: {html.escape(tag)}\nRank: <b>{rank}</b>\nBalance: <b>{money(u['balance_cents'])}</b>"
-         if language == "en" else
-         f"👤 <b>Mi cuenta</b>\nID: <code>{u['telegram_id']}</code>\nUsuario: {html.escape(tag)}\nRango: <b>{rank}</b>\nSaldo: <b>{money(u['balance_cents'])}</b>"),
-        parse_mode=ParseMode.HTML,
-    )
+    scope = {"all": "Todo", "certificates": "Certificados", "products": "Productos"}[access_scope(u)]
+    body = (f"{message_icon('account_title', '👤')} <b>𝙍𝘼𝙉𝘿𝙔 𝙈𝙊𝘿 // {'𝘼𝘾𝘾𝙊𝙐𝙉𝙏' if language == 'en' else '𝙈𝙄 𝘾𝙐𝙀𝙉𝙏𝘼'}</b>\n"
+            f"ID: <code>{u['telegram_id']}</code>\n"
+            f"{message_icon('account_user', '👤')} {'User' if language == 'en' else 'Usuario'}: {html.escape(tag)}\n"
+            f"{message_icon('account_rank', '💎')} {'Rank' if language == 'en' else 'Rango'}: <b>{rank}</b>\n"
+            f"🧭 {'Catalog' if language == 'en' else 'Catálogo'}: <b>{scope}</b>\n"
+            f"{message_icon('account_balance', '💰')} {'Balance' if language == 'en' else 'Saldo'}: <b>{money(u['balance_cents'])}</b>")
+    await reply_with_icons(update.effective_message, body)
 
 
 async def show_history(update: Update) -> None:
@@ -740,6 +796,9 @@ def safe_certificate_name(value: str) -> str:
 
 
 async def show_certificate_offer(update: Update) -> None:
+    if not scope_allows(current_user(update), "certificates"):
+        await update.effective_message.reply_text("🔒 Tu catálogo no incluye certificados.")
+        return
     if not chungchi.configured:
         await update.effective_message.reply_text(
             "⚠️ Certificados temporalmente no disponibles. Falta configurar el API en Render."
@@ -778,6 +837,9 @@ async def show_certificate_offer(update: Update) -> None:
 
 
 async def begin_certificate_key(update: Update, context: ContextTypes.DEFAULT_TYPE, key_code: str | None = None) -> None:
+    if not scope_allows(db.user(update.effective_user.id), "certificates"):
+        await update.effective_message.reply_text("🔒 Tu catálogo no incluye certificados.")
+        return
     if key_code:
         row = db.certificate_key(update.effective_user.id, key_code)
         if not row or row["status"] != "available":
@@ -1210,6 +1272,16 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = current_user(update)
     text = canonical_menu_text((update.effective_message.text or "").strip())
     admin_panel = panel(context) == "admin"
+    if not admin_panel and user["role"] == "reseller":
+        product_texts = ("🛒 Comprar keys", "🛒 Buy keys", "🔑 Mis keys", "🔑 My keys",
+                         "🔍 Consultar key", "🔍 Check key", "🧾 Historial", "🧾 History")
+        certificate_texts = ("👋 Welcome!", "Welcome!", "🍎 Certificado iOS", "🍎 iOS Certificate",
+                             "🔑 Use Key", "Use Key", "💠 Tu certificado", "💠 My certificate",
+                             "🔍 Check UDID", "Check UDID")
+        if (text in product_texts and not scope_allows(user, "products") or
+                text in certificate_texts and not scope_allows(user, "certificates")):
+            await update.effective_message.reply_text("🔒 Esta opción no está incluida en tu catálogo.")
+            return
     if admin_panel and not can_control_keys(update.effective_user.id):
         await update.effective_message.reply_text("⛔ Este bot es privado.")
         return
@@ -1504,10 +1576,10 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 await message.reply_text(
                     "✅ Cuenta vinculada con rol <b>Administrador</b>.\nYa puedes abrir el bot privado de administración.",
                     parse_mode=ParseMode.HTML,
-                    reply_markup=style_menu(USER_MENU, "seller"),
+                    reply_markup=user_menu(language_of(linked), access_scope(linked)),
                 )
             else:
-                await message.reply_text("✅ Cuenta vinculada. Ya eres socio comprador.", reply_markup=style_menu(USER_MENU, "seller"))
+                await message.reply_text("✅ Cuenta vinculada. Ya eres socio comprador.", reply_markup=user_menu(language_of(linked), access_scope(linked)))
         return True
     if flow["name"] == "partner_create_login":
         flow["name"], flow["login"] = "partner_create_password", text
@@ -1581,7 +1653,9 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         elif not text:
             await message.reply_text("❌ Envía texto, una foto o un documento.")
             return True
-        for target in db.reseller_ids():
+        caption = branded_announcement(caption, caption=True) if caption else caption
+        announcement_text = branded_announcement(text)
+        for target in db.reseller_ids(include_certificates=False):
             try:
                 if kind == "photo":
                     await reseller_bot(context).send_photo(target, io.BytesIO(payload), caption=caption)
@@ -1602,7 +1676,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                     stream.name = filename
                     await reseller_bot(context).send_document(target, stream, caption=caption)
                 else:
-                    await reseller_bot(context).send_message(target, text)
+                    await reseller_bot(context).send_message(target, announcement_text)
                 sent += 1
             except Exception:
                 failed += 1
@@ -1883,7 +1957,8 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         )
         method = {"zelle": "Zelle", "cashapp": "Cash App", "paypal": "PayPal"}.get(flow.get("method"), "No indicado")
         context.user_data.pop("flow", None)
-        await message.reply_text(f"✅ Recarga #{topup_id} enviada. Espera la aprobación del Admin.", reply_markup=style_menu(USER_MENU, "seller"))
+        partner = db.user(message.from_user.id)
+        await message.reply_text(f"✅ Recarga #{topup_id} enviada. Espera la aprobación del Admin.", reply_markup=user_menu(language_of(partner), access_scope(partner)))
         item = db.topup(topup_id)
         keys = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Aprobar", callback_data=f"topup:approve:{topup_id}"),
@@ -2072,7 +2147,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if data == "cert:confirm":
-        if admin_panel or user["role"] not in ("reseller", "admin"):
+        if admin_panel or user["role"] not in ("reseller", "admin") or not scope_allows(user, "certificates"):
             await query.answer("Acceso no autorizado", show_alert=True)
             return
         await query.answer("Verificando disponibilidad…")
@@ -2168,6 +2243,21 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if action == "manage":
             await query.answer()
             await show_partner_manager(query.message, target)
+        elif action == "scope":
+            await query.answer()
+            partner = db.reseller(target)
+            if not partner:
+                await query.message.reply_text("Socio no encontrado.")
+                return
+            await query.message.reply_text(
+                f"🧭 <b>Catálogo del socio</b>\nActual: <b>{html.escape(access_scope(partner))}</b>\n"
+                "El rango VIP y el saldo se conservan.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🍎 Solo certificados", callback_data=f"partnerscope:{target}:certificates")],
+                    [InlineKeyboardButton("📦 Solo productos", callback_data=f"partnerscope:{target}:products")],
+                    [InlineKeyboardButton("🌐 Todo", callback_data=f"partnerscope:{target}:all")],
+                ]))
         elif action in ("add", "subtract"):
             await query.answer()
             context.user_data["flow"] = {
@@ -2221,6 +2311,28 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
         return
 
+    if data.startswith("partnerscope:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin", show_alert=True)
+            return
+        _, target_text, scope = data.split(":", 2)
+        target = int(target_text)
+        if scope not in ("all", "certificates", "products"):
+            await query.answer("Opción inválida", show_alert=True)
+            return
+        changed = db.set_access_scope(target, scope)
+        await query.answer("Catálogo actualizado" if changed else "Socio no encontrado", show_alert=True)
+        if changed:
+            label = {"all": "Todo", "certificates": "Solo certificados", "products": "Solo productos"}[scope]
+            await query.message.reply_text(f"✅ {label}. El menú del socio se actualizará en /start.")
+            try:
+                partner = db.user(target)
+                await reseller_bot(context).send_message(target, f"🧭 Tu catálogo cambió a {label}.",
+                    reply_markup=user_menu(language_of(partner), scope))
+            except Exception as exc:
+                log.warning("No se pudo actualizar el menú de %s: %s", target, exc)
+        return
+
     if data.startswith("access:"):
         if not admin_panel or not is_admin(query.from_user.id):
             await query.answer("Solo Admin", show_alert=True)
@@ -2261,7 +2373,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.edit_message_reply_markup(reply_markup=None)
             await query.message.reply_text(f"✅ Usuario {target}: {label}.")
             try:
-                await reseller_bot(context).send_message(target, "✅ Tu cuenta fue aprobada como revendedor." if role == "reseller" else "❌ Tu acceso de revendedor no fue aprobado.", reply_markup=style_menu(USER_MENU, "seller") if role == "reseller" else style_menu(PENDING_MENU, "access"))
+                partner = db.user(target)
+                await reseller_bot(context).send_message(target, "✅ Tu cuenta fue aprobada como revendedor." if role == "reseller" else "❌ Tu acceso de revendedor no fue aprobado.", reply_markup=user_menu(language_of(partner), access_scope(partner)) if role == "reseller" else style_menu(PENDING_MENU, "access"))
             except Exception:
                 pass
         return
@@ -2349,16 +2462,17 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     for group, (label, _) in EMOJI_MENU_GROUPS.items()
                 ] + [
                     [InlineKeyboardButton("Entrega, instalación y compra", callback_data="certemoji:group:actions")],
+                    [InlineKeyboardButton("Mensajes · cuenta y keys", callback_data="certemoji:group:messages")],
                     [InlineKeyboardButton("GBox", callback_data="certemoji:set:gbox"),
                      InlineKeyboardButton("ESign", callback_data="certemoji:set:esign")],
                 ]))
         elif data.startswith("certemoji:group:"):
             group = data.rsplit(":", 1)[-1]
-            if group == "actions":
+            if group in ("actions", "messages"):
                 await query.message.reply_text("Elige un botón de la entrega o compra:",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton(label, callback_data=f"certemoji:set:{slot}")]
-                        for slot, label in EXTRA_EMOJI_SLOTS.items()
+                        for slot, label in (EXTRA_EMOJI_SLOTS if group == "actions" else MESSAGE_EMOJI_SLOTS).items()
                     ]))
                 return
             if group not in EMOJI_MENU_GROUPS:
@@ -2373,7 +2487,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                                            reply_markup=InlineKeyboardMarkup(buttons))
         else:
             slot = data.rsplit(":", 1)[-1]
-            if slot not in CERTIFICATE_EMOJI_DEFAULTS and slot not in EXTRA_EMOJI_SLOTS and certificate_emoji(slot) is None and not any(
+            if slot not in CERTIFICATE_EMOJI_DEFAULTS and slot not in EXTRA_EMOJI_SLOTS and slot not in MESSAGE_EMOJI_SLOTS and certificate_emoji(slot) is None and not any(
                 slot == menu_slot(group, row, column)
                 for group in EMOJI_MENU_GROUPS
                 for markup in (current_group_markup(group),)
@@ -2757,7 +2871,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text(key_receipt_text(sale), parse_mode=ParseMode.HTML)
+        await reply_with_icons(query.message, key_receipt_text(sale))
         if sale["file"]:
             try:
                 stream = io.BytesIO(sale["file"]["file_data"])
@@ -2896,10 +3010,10 @@ async def daily_announcement_loop(bot, stop_event: asyncio.Event) -> None:
             sent = failed = 0
             photo = (media_dir / "aimbot-avatar.jpg").read_bytes()
             video = (media_dir / "aimbot-avatar.mp4").read_bytes()
-            for target in db.reseller_ids():
+            for target in db.reseller_ids(include_certificates=False):
                 try:
                     await bot.send_media_group(target, media=[
-                        InputMediaPhoto(io.BytesIO(photo), caption=announcement["body"]),
+                        InputMediaPhoto(io.BytesIO(photo), caption=branded_announcement(announcement["body"], caption=True)),
                         InputMediaVideo(io.BytesIO(video)),
                     ])
                     sent += 1

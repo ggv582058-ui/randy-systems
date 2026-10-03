@@ -11,7 +11,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
 from telegram.constants import ParseMode
 
 import bot
-from database import InsufficientBalance, NotApproved
+from database import InsufficientBalance, NotApproved, ProductRestricted
 from chungchi_api import ChungChiError
 
 
@@ -113,6 +113,9 @@ async def show_my_certificates(update, context) -> None:
 
 
 async def show_certificate_offer(update):
+    if not bot.scope_allows(bot.current_user(update), "certificates"):
+        await update.effective_message.reply_text("🔒 Tu catálogo no incluye certificados.")
+        return
     if not bot.chungchi.configured:
         await update.effective_message.reply_text(
             "⚠️ Certificados temporalmente no disponibles. Falta configurar el API en Render."
@@ -224,7 +227,7 @@ async def callback(update, context):
         return
 
     if data == "cert:confirm":
-        if admin_panel or user["role"] not in ("reseller", "admin"):
+        if admin_panel or user["role"] not in ("reseller", "admin") or not bot.scope_allows(user, "certificates"):
             await query.answer("Acceso no autorizado", show_alert=True)
             return
         await query.answer("Verificando disponibilidad…")
@@ -244,12 +247,12 @@ async def callback(update, context):
         except sqlite3.IntegrityError:
             await query.answer("Esta compra ya fue procesada", show_alert=True)
             return
-        except (ChungChiError, InsufficientBalance, NotApproved) as exc:
+        except (ChungChiError, InsufficientBalance, NotApproved, ProductRestricted) as exc:
             await query.message.reply_text(f"❌ {html.escape(str(exc))}", parse_mode=ParseMode.HTML)
             return
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text(
-            "🤖✅ <b>PAGO CONFIRMADO</b>\n"
+        await bot.reply_with_icons(query.message,
+            f"{bot.message_icon('certificate_paid', '✅')} <b>𝙍𝘼𝙉𝘿𝙔 𝙈𝙊𝘿 // 𝙆𝙀𝙔 𝙀𝙉𝙏𝙍𝙀𝙂𝘼𝘿𝘼</b>\n"
             "<code>certificate.payment = ACCEPTED</code>\n"
             "━━━━━━━━━━━━━━━━━━\n"
             f"🔑 Key: <code>{issued['key_code']}</code>\n"
@@ -257,7 +260,6 @@ async def callback(update, context):
             f"💰 Saldo restante: <b>{bot.money(issued['balance_cents'])}</b>\n\n"
             "📲 Primero elige iPhone o iPad; después registrarás el UDID. Cuando esté listo quedará guardado en <b>💠 Tu certificado</b>.",
             reply_markup=bot.certificate_menu(bot.language_of(user)),
-            parse_mode=ParseMode.HTML,
         )
         context.user_data["flow"] = {"name": "certificate_device", "certificate_key": issued["key_code"]}
         await bot.ask_certificate_device(query.message)
@@ -302,6 +304,9 @@ async def handle_text_menu(update, context):
         if user and user["role"] in ("reseller", "admin") and text in (
             "💠 Tu certificado", "💠 My certificate"
         ):
+            if not bot.scope_allows(user, "certificates"):
+                await update.effective_message.reply_text("🔒 Tu catálogo no incluye certificados.")
+                return
             context.user_data.pop("flow", None)
             context.user_data.pop("certificate_pending", None)
             await show_my_certificates(update, context)

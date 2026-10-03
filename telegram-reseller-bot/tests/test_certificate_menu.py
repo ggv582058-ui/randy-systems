@@ -60,6 +60,18 @@ class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(bot.user_menu("es").keyboard[1][0].text, "💠 Tu certificado")
             self.assertEqual(bot.menu_button_label("seller_my_certificate"), "Menú de vendedores · 💠 Tu certificado")
 
+    def test_catalog_scope_filters_live_menu_but_keeps_account_and_balance(self):
+        with patch.object(bot.db, "private_setting", return_value=""):
+            for language in ("es", "en"):
+                certificates = " ".join(button.text for row in bot.user_menu(language, "certificates").keyboard for button in row)
+                products = " ".join(button.text for row in bot.user_menu(language, "products").keyboard for button in row)
+                self.assertIn("Use Key", certificates)
+                self.assertNotIn("Comprar keys" if language == "es" else "Buy keys", certificates)
+                self.assertIn("Comprar keys" if language == "es" else "Buy keys", products)
+                self.assertNotIn("Use Key", products)
+                self.assertIn("Mi cuenta" if language == "es" else "My account", certificates)
+                self.assertIn("Recargar saldo" if language == "es" else "Add balance", products)
+
     def test_certificate_actions_have_distinct_editable_icons(self):
         with patch.object(bot.db, "private_setting", side_effect=lambda key: "2222222222222222222" if key == "certemoji:get_certificate" else ""):
             button = certificate_experience.delivery_menu({"id": 7}).inline_keyboard[0][0]
@@ -121,7 +133,8 @@ class CertificateMenuTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_device_selection_precedes_udid_and_password(self):
         row = {"key_code": "CERT-TEST", "status": "available"}
-        with patch.object(bot.db, "certificate_key", return_value=row):
+        with patch.object(bot.db, "certificate_key", return_value=row), \
+             patch.object(bot.db, "user", return_value=self.user):
             await bot.begin_certificate_key(self.update, self.context, "CERT-TEST")
         self.assertEqual(self.context.user_data["flow"]["name"], "certificate_device")
         buttons = self.reply.await_args.kwargs["reply_markup"].inline_keyboard[0]

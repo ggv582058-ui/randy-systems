@@ -36,6 +36,25 @@ class DatabaseTests(unittest.TestCase):
         changed, _ = self.db.approve_topup(topup, 1)
         self.assertTrue(changed)
 
+    def test_catalog_scopes_gate_purchases_and_announcement_recipients(self):
+        self.credit(2000)
+        self.db.add_keys(self.product, ["PRODUCT-KEY"])
+        self.assertTrue(self.db.set_access_scope(2, "certificates"))
+        self.assertEqual(self.db.products_for_user(2), [])
+        self.assertIsNone(self.db.product_for_user(self.product, 2))
+        self.assertNotIn(2, self.db.reseller_ids(include_certificates=False))
+        with self.assertRaises(ProductRestricted):
+            self.db.purchase(2, self.product)
+        self.assertEqual(self.db.product(self.product)["stock"], 1)
+        issued = self.db.buy_certificate_key(2, "CERT-ONLY-123", 500)
+        self.assertEqual(issued["balance_cents"], 1500)
+        self.assertTrue(self.db.set_access_scope(2, "products"))
+        self.assertIn(2, self.db.reseller_ids(include_certificates=False))
+        with self.assertRaises(ProductRestricted):
+            self.db.buy_certificate_key(2, "CERT-BLOCK-456", 500)
+        self.assertEqual(self.db.purchase(2, self.product)["key"], "PRODUCT-KEY")
+        self.assertEqual(Database(self.db.path).user(2)["access_scope"], "products")
+
     def test_edit_product_preserves_inventory_and_partner_price(self):
         self.db.add_keys(self.product, ["KEY-EXISTING"])
         self.db.set_reseller_price(2, self.product, 350)

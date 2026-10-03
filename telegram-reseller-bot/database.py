@@ -112,6 +112,8 @@ class Database:
                     requested_access INTEGER NOT NULL DEFAULT 0,
                     tier TEXT NOT NULL DEFAULT 'regular'
                         CHECK(tier IN ('regular','vip')),
+                    access_scope TEXT NOT NULL DEFAULT 'all'
+                        CHECK(access_scope IN ('all','certificates','products')),
                     language TEXT NOT NULL DEFAULT 'es'
                         CHECK(language IN ('es','en')),
                     created_at TEXT NOT NULL,
@@ -354,6 +356,8 @@ class Database:
             user_columns = {row["name"] for row in con.execute("PRAGMA table_info(users)")}
             if "tier" not in user_columns:
                 con.execute("ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'regular'")
+            if "access_scope" not in user_columns:
+                con.execute("ALTER TABLE users ADD COLUMN access_scope TEXT NOT NULL DEFAULT 'all'")
             if "language" not in user_columns:
                 con.execute("ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'es'")
 
@@ -521,9 +525,17 @@ class Database:
                            created_at=excluded.created_at""",
                         (order_id, kind, ipa, bundle_id, version, utcnow()))
 
-    def reseller_ids(self) -> list[int]:
+    def reseller_ids(self, include_certificates: bool = True) -> list[int]:
         with self.connect() as con:
-            return [r[0] for r in con.execute("SELECT telegram_id FROM users WHERE role='reseller'").fetchall()]
+            where = "role='reseller'" + ("" if include_certificates else " AND access_scope!='certificates'")
+            return [r[0] for r in con.execute(f"SELECT telegram_id FROM users WHERE {where}").fetchall()]
+
+    def set_access_scope(self, telegram_id: int, scope: str) -> bool:
+        if scope not in {"all", "certificates", "products"}:
+            raise ValueError("Tipo de catálogo inválido")
+        with self.transaction() as con:
+            return con.execute("UPDATE users SET access_scope=?,updated_at=? WHERE telegram_id=? AND role='reseller'",
+                               (scope, utcnow(), telegram_id)).rowcount == 1
 
     def admin_ids(self) -> list[int]:
         with self.connect() as con:
@@ -744,6 +756,9 @@ class Database:
     def products_for_user(self, user_id: int, active_only: bool = True) -> list[sqlite3.Row]:
         where = "WHERE p.active=1 AND COALESCE(a.allowed,1)=1" if active_only else "WHERE COALESCE(a.allowed,1)=1"
         with self.connect() as con:
+            user = con.execute("SELECT role,access_scope FROM users WHERE telegram_id=?", (user_id,)).fetchone()
+            if user and user["role"] != "admin" and user["access_scope"] == "certificates":
+                return []
             return con.execute(
                 f"""SELECT p.*, COALESCE(rp.price_cents,p.price_cents) AS effective_price_cents,
                     COUNT(CASE WHEN k.status='available' THEN 1 END) AS stock
@@ -757,6 +772,9 @@ class Database:
 
     def product_for_user(self, product_id: int, user_id: int) -> sqlite3.Row | None:
         with self.connect() as con:
+            user = con.execute("SELECT role,access_scope FROM users WHERE telegram_id=?", (user_id,)).fetchone()
+            if user and user["role"] != "admin" and user["access_scope"] == "certificates":
+                return None
             return con.execute(
                 """SELECT p.*, COALESCE(rp.price_cents,p.price_cents) AS effective_price_cents,
                    COALESCE(a.allowed,1) AS allowed,
@@ -880,6 +898,8 @@ class Database:
             user = con.execute("SELECT * FROM users WHERE telegram_id=?", (user_id,)).fetchone()
             if not user or user["role"] not in ("reseller", "admin"):
                 raise NotApproved("Tu cuenta no está aprobada")
+            if user["role"] != "admin" and user["access_scope"] == "certificates":
+                raise ProductRestricted("Tu cuenta está configurada para vender solo certificados")
             product = con.execute(
                 "SELECT * FROM products WHERE id=? AND active=1", (product_id,)
             ).fetchone()
@@ -977,6 +997,8 @@ class Database:
             user = con.execute("SELECT * FROM users WHERE telegram_id=?", (user_id,)).fetchone()
             if not user or user["role"] not in ("reseller", "admin"):
                 raise NotApproved("Tu cuenta no está aprobada")
+            if user["role"] != "admin" and user["access_scope"] == "products":
+                raise ProductRestricted("Tu cuenta está configurada para vender solo productos")
             if user["balance_cents"] < price_cents:
                 raise InsufficientBalance("Saldo insuficiente")
             now = utcnow()
@@ -1008,6 +1030,9 @@ class Database:
         p12_password: str, display_name: str, install_token: str, install_expires_at: str,
     ) -> sqlite3.Row:
         with self.transaction() as con:
+            user = con.execute("SELECT role,access_scope FROM users WHERE telegram_id=?", (user_id,)).fetchone()
+            if user and user["role"] != "admin" and user["access_scope"] == "products":
+                raise ProductRestricted("Tu cuenta está configurada para vender solo productos")
             key = con.execute(
                 "SELECT * FROM certificate_keys WHERE user_id=? AND key_code=? COLLATE NOCASE",
                 (user_id, key_code.strip()),
