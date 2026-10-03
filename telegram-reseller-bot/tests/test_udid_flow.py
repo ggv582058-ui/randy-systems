@@ -10,7 +10,7 @@ import os
 import threading
 from pathlib import Path
 from unittest.mock import patch
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 from urllib.error import HTTPError
 
 from database import Database
@@ -36,6 +36,9 @@ class UDIDTests(unittest.TestCase):
                     self.assertIn("/udid/profile/private",page)
                     self.assertIn("tg.openLink(",page)
                     self.assertIn("try_browser:'safari'",page)
+                    self.assertIn("/udid/private?safari=1",page)
+                    self.assertIn("UDID BY RANDY MOD",page)
+                    self.assertIn('class="code-side left"',page)
                     self.assertIn('onclick="getProfile(event)"',page)
                     with urlopen(base+"/udid/profile/private") as response:
                         self.assertEqual(response.headers.get_content_type(),"application/x-apple-aspen-config")
@@ -86,6 +89,26 @@ class UDIDTests(unittest.TestCase):
             button=client.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
             self.assertEqual(button.callback_data,"udid:use:token")
             self.assertEqual(db.udid_session("token")["udid"],value)
+            # Exercise the HTTP handler after the production reliability wrapper,
+            # which used to intercept the callback and return 404.
+            import certificate_reliability
+            class ProductionHandler(HealthHandler):
+                do_POST = certificate_reliability.fast_telegram_webhook_post
+            loop=asyncio.new_event_loop()
+            server=BotHTTPServer(("127.0.0.1",0),ProductionHandler,loop)
+            server.udid_service=service
+            thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+            base=f"http://127.0.0.1:{server.server_port}"
+            try:
+                with patch.dict(os.environ,{"RENDER_EXTERNAL_URL":base}):
+                    with urlopen(Request(base+"/udid/callback/token",data=signed,headers={"Content-Type":"application/pkcs7-signature"})) as response:
+                        self.assertIn("Tu UDID está listo",response.read().decode())
+                    with self.assertRaises(HTTPError) as failure:
+                        urlopen(Request(base+"/udid/callback/token",data=b"bad response"))
+                    self.assertEqual(failure.exception.code,400)
+            finally:
+                server.shutdown();server.server_close();thread.join();loop.close()
+
 
             with self.assertRaises(ValueError):
                 device_response(signed,"other")

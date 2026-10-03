@@ -194,7 +194,7 @@ def fast_telegram_webhook_post(self) -> None:
     """Acknowledge Telegram immediately so slow provider work is never retried."""
     server = self.server
     path = urlsplit(self.path).path
-    if path in ("/chungchi/webhook", "/maintenance/import-esign"):
+    if path in ("/chungchi/webhook", "/maintenance/import-esign") or path.startswith("/udid/callback/"):
         return _original_health_post(self)
 
     app = server.applications.get(path)

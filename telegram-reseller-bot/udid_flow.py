@@ -76,7 +76,7 @@ if(tg&&tg.initData){{tg.ready();tg.expand();}}
 function getProfile(event){{
   if(tg&&tg.initData){{
     event.preventDefault();
-    tg.openLink(new URL('/udid/profile/{token}',location.origin).href,{{try_browser:'safari'}});
+    tg.openLink(new URL('/udid/{token}?safari=1',location.origin).href,{{try_browser:'safari'}});
     document.getElementById('next-step').hidden=false;
   }}
 }}
@@ -84,6 +84,11 @@ function returnToBot(event){{
   if(tg&&tg.initData){{event.preventDefault();tg.openTelegramLink({json.dumps(back)});tg.close();}}
 }}
 const captured={str(bool(udid)).lower()};
+if(!captured&&!(tg&&tg.initData)&&new URLSearchParams(location.search).get('safari')==='1'){{
+  let downloaded=false;
+  try{{downloaded=sessionStorage.getItem('downloaded:{token}')==='1';sessionStorage.setItem('downloaded:{token}','1');}}catch(error){{}}
+  if(!downloaded)setTimeout(()=>{{location.href='/udid/profile/{token}';}},1200);
+}}
 if(captured&&!(tg&&tg.initData)){{
   let tried=false;
   try{{tried=sessionStorage.getItem('returned:{token}')==='1';sessionStorage.setItem('returned:{token}','1');}}catch(error){{}}
@@ -91,9 +96,33 @@ if(captured&&!(tg&&tg.initData)){{
 }}
 </script>'''
             result = (f'<h2>Tu UDID está listo</h2><p>Equipo: {html.escape(row["model"] or "iPhone / iPad")}</p><code id="udid">{udid}</code><button onclick="navigator.clipboard.writeText(document.getElementById(\'udid\').textContent)">Copiar UDID</button><a class="button" onclick="returnToBot(event)" href="{back}">Continuar en Telegram ↗</a><p>Tu UDID se guarda en tu sesión. Puedes quitar el perfil de Ajustes.</p>'
-                      if udid else f'<h1>Tu equipo.<br>Tu certificado.</h1><p>Obtén el UDID de este iPhone o iPad para registrar tu certificado.</p><a class="button" onclick="getProfile(event)" href="/udid/profile/{token}">Obtener mi UDID ↗</a><p id="next-step" hidden>En Safari, toca Permitir. Después abre Ajustes → Perfil descargado → Instalar.</p><ol><li>Abre esta página en Safari.</li><li>Descarga el perfil y permite la descarga.</li><li>Ajustes → Perfil descargado → Instalar.</li><li>Vuelve aquí. El UDID también llegará a Telegram.</li></ol><p class="small">El perfil solicita UDID y modelo. Se vinculan a tu cuenta durante 30 minutos. No configura administración remota. Puedes quitarlo después.</p>')
+                      if udid else f'<h1>Tu equipo.<br>Tu certificado.</h1><p>Obtén el UDID de este iPhone o iPad para registrar tu certificado.</p><a class="button" onclick="getProfile(event)" href="/udid/profile/{token}">Obtener mi UDID ↗</a><p id="next-step" hidden>En Safari, toca Permitir. Después abre Ajustes → Perfil descargado → Instalar.</p><ol><li>Toca Obtener mi UDID y permite la descarga en Safari.</li><li>Ajustes → Perfil descargado → Instalar.</li><li>Vuelve aquí. El UDID también llegará a Telegram.</li></ol><p class="small">El perfil solicita UDID y modelo. Se vinculan a tu cuenta durante 30 minutos. No configura administración remota. Puedes quitarlo después.</p>')
             payload = f'''<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Randy Mod · UDID</title><style>
-*{{box-sizing:border-box}}body{{margin:0;background:#050f1a;color:#edf8ff;font:16px system-ui}}main{{max-width:640px;margin:auto;padding:24px}}.brand{{letter-spacing:3px;color:#78baff;font-size:12px;font-weight:800}}.art{{height:210px;margin:22px 0;border-radius:28px;overflow:hidden;position:relative;background:#0a2038}}.art img{{width:100%;height:100%;object-fit:cover;animation:float 8s ease-in-out infinite alternate}}.art:after{{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,#071a3b66)}}@keyframes float{{to{{transform:scale(1.07) translateY(-4px)}}}}h1{{font-size:38px;line-height:1.05}}p,li{{color:#b9cce1;line-height:1.6}}li{{margin:12px 0}}a.button,button{{display:block;width:100%;padding:18px;border:0;border-radius:17px;background:#48b4ff;color:#041e35;font-size:17px;font-weight:800;text-align:center;text-decoration:none}}code{{display:block;overflow-wrap:anywhere;padding:22px;background:#11283f;border-radius:18px;margin:20px 0}}.small{{font-size:12px}}@media(prefers-reduced-motion:reduce){{.art img{{animation:none}}}}</style><main><div class="brand">RANDY MOD / DEVICE ID</div><div class="art"><img src="/brand/cover" alt="Randy Mod"></div>{result}</main>{navigation}</html>'''.encode()
+*{{box-sizing:border-box}}body{{margin:0;background:radial-gradient(ellipse at 50% 15%,#0c4d8566,transparent 60%),#030b18;color:#edf8ff;font:16px system-ui}}main{{max-width:640px;margin:auto;padding:24px;position:relative;z-index:1}}.brand{{text-shadow:0 0 18px #3fa9ff;letter-spacing:3px;color:#78baff;font-size:12px;font-weight:800}}.art{{height:210px;margin:22px 0;border-radius:28px;overflow:hidden;position:relative;background:#0a2038}}.art img{{width:100%;height:100%;object-fit:cover;animation:float 8s ease-in-out infinite alternate}}.art:after{{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,#071a3b66)}}@keyframes float{{to{{transform:scale(1.07) translateY(-4px)}}}}h1{{font-size:38px;line-height:1.05}}p,li{{color:#b9cce1;line-height:1.6}}li{{margin:12px 0}}a.button,button{{display:block;width:100%;padding:18px;border:0;border-radius:17px;background:#48b4ff;color:#041e35;font-size:17px;font-weight:800;text-align:center;text-decoration:none}}code{{display:block;overflow-wrap:anywhere;padding:22px;background:#11283f;border-radius:18px;margin:20px 0}}.small{{font-size:12px}}.art{{box-shadow:0 0 40px #008cfa44;border:1px solid #459ffb66}}body:before{{content:"";position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(#2486c911 1px,transparent 1px),linear-gradient(90deg,#2486c911 1px,transparent 1px);background-size:34px 34px;mask-image:linear-gradient(transparent,#000)}}.code-side{{position:fixed;top:0;bottom:0;width:70px;overflow:hidden;pointer-events:none;color:#36a8ff;opacity:.22;font:11px/2.3 monospace;white-space:pre-wrap;overflow-wrap:anywhere}}.code-side.left{{left:0}}.code-side.right{{right:0}}.code-side span{{display:block;animation:code-stream 30s linear infinite}}@keyframes code-stream{{from{{transform:translateY(15vh)}}to{{transform:translateY(-60vh)}}}}@media(prefers-reduced-motion:reduce){{.art img,.code-side span{{animation:none}}}}</style><div class="code-side left" aria-hidden="true"><span>const randy = {{
+ device: 'iOS',
+ udid: 'ready',
+ style: 'robotic'
+}};
+// RANDY MOD
+await connect();
+0101 0011
+private.session
+// DEVICE ID
+const randy = {{
+ theme: 'blue'
+}};
+await connect();</span></div><div class="code-side right" aria-hidden="true"><span>// RANDY SYSTEMS
+async device() {{
+ return profile;
+}}
+0101 0110
+UDID.capture()
+// DEVICE ID
+private.session
+async device() {{
+ return profile;
+}}
+0101 0110</span></div><main><div class="brand">UDID BY RANDY MOD</div><div class="art"><img src="/brand/cover" alt="Randy Mod"></div>{result}</main>{navigation}</html>'''.encode()
             handler.send_response(200)
             handler.send_header("Content-Type", "text/html; charset=utf-8")
         else:
