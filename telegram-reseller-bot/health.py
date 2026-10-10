@@ -22,6 +22,41 @@ from app_signing import app_open_url
 log = logging.getLogger("randy-webhook")
 
 
+def _installer_style() -> str:
+    """Shared Randy branding for the Telegram mini app and Safari handoff."""
+    return """
+*{box-sizing:border-box}html{background:#030916;color-scheme:dark}body{margin:0;min-height:100vh;color:#e9f5ff;font:15px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:radial-gradient(ellipse at 5% 12%,#095fc336,transparent 48%),radial-gradient(ellipse at 98% 75%,#044ea62b,transparent 50%),#030916;overflow-x:hidden}
+body:before{content:'';position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(#559fff06 1px,transparent 1px),linear-gradient(90deg,#559fff06 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(#000,transparent)}
+.code-rain{position:fixed;inset:0;overflow:hidden;pointer-events:none;user-select:none;color:#4c9bff;opacity:.13;font:11px/2.7 ui-monospace,SFMono-Regular,Consolas,monospace;z-index:0}.code-rain span{position:absolute;top:-180px;width:140px;white-space:pre-line;animation:code-drift 27s linear infinite}.code-rain span:nth-child(1){left:2%}.code-rain span:nth-child(2){right:1%;animation-delay:-13s}.code-rain span:nth-child(3){left:43%;animation-delay:-7s;opacity:.45}@keyframes code-drift{to{transform:translateY(110vh)}}
+main{position:relative;max-width:460px;margin:auto;padding:23px 20px calc(26px + env(safe-area-inset-bottom));min-height:100vh;text-align:center}header{display:flex;align-items:center;justify-content:space-between;text-align:left;margin-bottom:20px}.brand{font-size:15px;font-weight:850;letter-spacing:1.8px}.brand small{display:block;color:#6996c5;font:9px/2 ui-monospace,monospace;letter-spacing:2px}.secure{color:#8bdcff;background:#08315087;border:1px solid #2876a84d;padding:7px 9px;border-radius:8px;font:9px ui-monospace,monospace;letter-spacing:1px}.secure:before{content:'●';color:#6bd9ff;margin-right:5px}
+.brand-art{position:relative;width:100%;aspect-ratio:1.8;overflow:hidden;border-radius:22px;border:1px solid #51a9ff60;background:#06162d;box-shadow:0 15px 55px #006eff16}.brand-art img{width:100%;height:100%;object-fit:cover;object-position:50% 39%;animation:art-drift 12s ease-in-out infinite alternate}.brand-art:after{content:'';position:absolute;inset:0;background:linear-gradient(0deg,#03132988,transparent 40%);pointer-events:none}.art-caption{position:absolute;z-index:1;left:15px;bottom:13px;color:#b1d9ff;font:9px ui-monospace,monospace;letter-spacing:2px}@keyframes art-drift{to{transform:scale(1.045)}}
+.app-panel{position:relative;margin:18px 0 16px;padding:25px 21px 23px;border:1px solid #438bd342;border-radius:24px;background:linear-gradient(135deg,#122c4bba,#071328e8);box-shadow:inset 0 1px 0 #c4e5ff14,0 24px 55px #0005;backdrop-filter:blur(18px)}.panel-label{display:flex;justify-content:space-between;align-items:center;color:#699ac9;font:9px ui-monospace,monospace;letter-spacing:1.3px}.panel-label b{color:#8fccff;font-weight:500}.orb{position:relative;margin:24px auto 15px;width:90px;height:90px;padding:6px;border-radius:25px;background:linear-gradient(140deg,#2e83d5,#0b2853);box-shadow:0 0 0 7px #409aff0c,0 14px 42px #1384ff29}.orb:after{content:'';position:absolute;inset:-12px;border:1px solid #64b6ff25;border-radius:33px}.orb img{width:100%;height:100%;object-fit:cover;border-radius:20px}.orb .fallback{display:grid;place-items:center;height:100%;font-size:30px;font-weight:800;color:white}
+h1{font-size:32px;letter-spacing:-1px;margin:10px 0 5px}.version{font-size:12px;color:#90b4d7}.badge{display:inline-flex;align-items:center;gap:6px;margin:15px 0 3px;font:9px ui-monospace,monospace;letter-spacing:1px;color:#91d2ff}.badge:before{content:'●';font-size:8px;color:#5ac5ff}.hint{font-size:13px;line-height:1.65;color:#97b2cf;margin:14px 0 18px}.install,.button{position:relative;display:flex;align-items:center;justify-content:center;gap:10px;min-height:56px;width:100%;border:1px solid #76bdff70;border-radius:15px;background:linear-gradient(110deg,#136bdf,#2199f3);box-shadow:0 9px 28px #087af331,inset 0 1px 0 #bce9ff35;color:#fff;font:750 16px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-decoration:none;cursor:pointer;transition:transform .2s,filter .2s}.install:hover,.button:hover{filter:brightness(1.1)}.install:active,.button:active{transform:scale(.98)}.install span{position:absolute;right:18px}.install:focus-visible,.button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid #b5e5ff;outline-offset:4px}.waiting{padding:16px;background:#102a47;border:1px solid #6d9ac849;border-radius:14px;line-height:1.6;color:#bfdbf7}.workflow{display:flex;justify-content:center;gap:18px;color:#6890b6;font:9px ui-monospace,monospace;margin-top:19px}.workflow span:first-child{color:#afd9ff}.workflow b{color:#389eff;font-weight:500;margin-right:4px}
+.video-guide{margin:16px 0;padding:15px;border:1px solid #377abd35;border-radius:18px;background:#0a1a2db8;text-align:left}.video-guide summary{cursor:pointer;list-style:none;font-size:12px;font-weight:700;color:#c7e3ff;display:flex;justify-content:space-between}.video-guide summary:after{content:'+';color:#63b5ff}.video-guide[open] summary:after{content:'−'}video{display:block;margin-top:14px;width:100%;max-height:220px;border-radius:12px;background:#06142a}.web{display:block;color:#81baf0;font-size:12px;text-decoration:none;margin:20px 0}.foot{color:#537899;font:9px/1.8 ui-monospace,monospace;letter-spacing:1px;margin-top:18px}.note{padding:15px 16px;border:1px solid #438bd334;border-radius:16px;background:#0a1a2dcc;text-align:left;color:#97b2cf;font-size:12px;line-height:1.7}.secondary{color:#6e92b5;font-size:11px;line-height:1.7}.button{margin:14px 0}#installed{background:#10345b;color:#b8ddff;border-color:#427bae80;box-shadow:none}#open-app.button{background:linear-gradient(110deg,#0c72e6,#36afff)}[hidden]{display:none!important}
+@media(prefers-reduced-motion:reduce){.code-rain span,.brand-art img{animation:none}.install,.button{transition:none}}@media(max-width:350px){main{padding-left:14px;padding-right:14px}.app-panel{padding:22px 16px}.secure{font-size:8px}.brand{font-size:13px}}
+"""
+
+
+def _installer_brand(token: str) -> str:
+    return f'''<div class="code-rain" aria-hidden="true"><span>const randy = true;
+certificate.ready();
+app.install();
+await device.open();
+// RANDY SYSTEMS
+export default randy;
+certificate.ready();
+app.install();</span><span>interface Device {{
+  certificate: Ready;
+  app: Signed;
+}}
+// PRIVATE ACCESS
+device.connect();
+app.launch();</span><span>01001010 00101001
+// RANDY MOD
+app.ready = true;
+certificate.load();</span></div><main><header><div class="brand">RANDY MOD<small>PRIVATE APP EXPERIENCE</small></div><div class="secure">PRIVATE</div></header><div class="brand-art"><img src="/certificate/cover/{token}" alt="Randy Mod" fetchpriority="high"><span class="art-caption">RANDY SYSTEMS / iOS</span></div>'''
+
+
 class BotHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -175,26 +210,20 @@ class HealthHandler(BaseHTTPRequestHandler):
                        f'<div class="waiting">La firma de la app aún no está lista. Vuelve al bot y toca <b>Preparar {name}</b>.</div>')
         body = f'''<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#061a12"><title>{name} · Randy Mod</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script><style>
-*{{box-sizing:border-box}}html{{background:#04110d}}body{{margin:0;color:#f4fff8;font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh;background:radial-gradient(circle at 50% -15%,#1b9f6466,transparent 55%),linear-gradient(#051d14,#030c0c);overflow-x:hidden}}body:before{{content:"";position:fixed;inset:-28%;background:radial-gradient(ellipse at 30% 33%,#0e9f6240,transparent 35%),radial-gradient(ellipse at 75% 68%,#137dac33,transparent 32%);filter:blur(35px);animation:drift 11s ease-in-out infinite alternate;pointer-events:none}}@keyframes drift{{to{{transform:translate(8%,-7%) rotate(9deg)}}}}
-main{{max-width:460px;min-height:100vh;margin:auto;padding:28px 20px calc(36px + env(safe-area-inset-bottom));text-align:center;position:relative}}
-main:before{{content:"";position:absolute;z-index:0;top:30px;left:15%;right:15%;height:260px;opacity:.13;background:url('/certificate/cover/{safe_token}') center/cover;border-radius:50%;filter:blur(28px);pointer-events:none}}
-.brand-art{{position:relative;margin:24px 0 0;height:150px;border-radius:24px;overflow:hidden;border:1px solid #79bfff40;background:#0b1c31}}.brand-art img{{width:55%;height:100%;object-fit:cover;object-position:center;animation:float-art 7s ease-in-out infinite alternate}}.brand-art:after{{content:"RANDY MOD / PRIVATE APPS";position:absolute;right:14px;top:48px;width:40%;font-size:14px;line-height:1.6;font-weight:800;color:#b5dfff}}@keyframes float-art{{to{{transform:scale(1.08) translateY(-3px)}}}}@media(prefers-reduced-motion:reduce){{.brand-art img{{animation:none}}}}
-.brand{{position:relative;text-align:left;font-size:12px;letter-spacing:3px;color:#9cbcaf;font-weight:800}}
-.orb{{position:relative;margin:55px auto 24px;width:154px;height:154px;border-radius:39px;background:linear-gradient(145deg,#12dc80,#026c48);display:grid;place-items:center;box-shadow:0 0 0 13px #49e8a010,0 0 0 35px #49e8a008,0 25px 90px #00c47b55;animation:rise .7s ease both,glow 3.8s ease-in-out 1s infinite alternate}}.orb img{{width:120px;height:120px;object-fit:cover;border-radius:30px}}@keyframes rise{{from{{opacity:0;transform:scale(.8) translateY(20px)}}to{{opacity:1;transform:scale(1) translateY(0)}}}}@keyframes glow{{to{{box-shadow:0 0 0 21px #49e8a018,0 0 0 45px #49e8a00b,0 25px 105px #00c47b88}}}}
-h1{{font-size:37px;margin:10px 0 2px;letter-spacing:-1px}}.version{{font-size:13px;color:#8caf9c}}.badge{{display:inline-block;margin-top:18px;padding:9px 15px;background:#33d99020;border:1px solid #66f7a85c;border-radius:999px;color:#a9f7ca;font-size:12px;font-weight:800;letter-spacing:.7px}}.hint{{margin:22px 0 20px;color:#bdd3c4;font-size:14px;line-height:1.55}}.install{{display:flex;align-items:center;justify-content:center;width:100%;border:0;border-radius:18px;text-decoration:none;font-size:17px;font-weight:750;min-height:58px;color:#022a18;background:#30db91;box-shadow:0 10px 34px #04bd7560}}.install span{{position:absolute;right:43px}}.waiting{{padding:18px;border-radius:16px;background:#133829;color:#cff1d8;line-height:1.5}}.foot{{margin-top:25px;color:#8da69b;font-size:12px;line-height:1.5}}video{{margin-top:20px;width:100%;border-radius:16px;background:#0b2419;max-height:220px}}.video-title{{margin-top:34px;color:#cef1da;text-align:left;font-size:13px;font-weight:700}}.web{{display:block;margin-top:25px;color:#96d7b2;font-size:13px}}@media(prefers-reduced-motion:reduce){{body:before,.orb{{animation:none}}}}
-</style></head><body><main><div class="brand">RANDY MOD / INSTALACIÓN PRIVADA</div>
-<div class="brand-art"><img src="/certificate/cover/{safe_token}" alt="Randy Mod"></div>
-<div class="orb"><img src="/certificate/logo/{safe_token}/{kind}" alt="Logo {name}"></div>
-<h1>{name}</h1><div class="version">App privada para tu certificado</div><div class="badge">{'FIRMA LISTA · TU EQUIPO' if signed else 'CERTIFICADO RECIBIDO'}</div>
-<p class="hint">Tu certificado ya está en Telegram. Abre la instalación en Safari y después importa los archivos P12 y MobileProvision en {name}.</p>
-{main_button}
-<div class="video-title">GUÍA RÁPIDA</div><video controls playsinline preload="metadata" poster="/certificate/cover/{safe_token}"><source src="/certificate/tutorial" type="video/mp4">Tu navegador no admite video.</video>
-<a class="web" href="/certificate/install/{safe_token}?app={kind}">Ver mi certificado en la web ↗</a>
-<div class="foot">Enlace privado. iPhone requiere confirmar la instalación desde Safari. La miniapp mantiene aquí tu video y tu certificado.</div>
+<meta name="theme-color" content="#030916"><title>{name} · Randy Mod</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script><style>{_installer_style()}</style>
+</head><body>{_installer_brand(safe_token)}
+<section class="app-panel"><div class="panel-label"><span>APP / {'01' if kind == 'gbox' else '02'}</span><b>iOS · PRIVATE</b></div>
+<div class="orb"><img src="/certificate/logo/{safe_token}/{kind}" alt="Logo {name}" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="fallback" hidden>{'G' if kind == 'gbox' else 'E'}</span></div>
+<h1>{name}</h1><div class="version">Tu app. Tu certificado. Tu dispositivo.</div><div class="badge">{'FIRMA LISTA · TU EQUIPO' if signed else 'CERTIFICADO RECIBIDO'}</div>
+<p class="hint">Instala {name} con tu certificado y abre la app cuando iOS termine.</p>
+{main_button}<div class="workflow" aria-label="Pasos de instalación"><span><b>01</b> INSTALAR</span><span><b>02</b> CONFIRMAR</span><span><b>03</b> ABRIR</span></div></section>
+<details class="video-guide"><summary>Guía rápida de instalación</summary><video controls playsinline preload="none" poster="/certificate/cover/{safe_token}"><source src="/certificate/tutorial" type="video/mp4">Tu navegador no admite video.</video><p class="secondary">Después de instalar, importa tus archivos P12 y MobileProvision en {name} con la contraseña que recibiste en Telegram.</p></details>
+<a class="web" href="/certificate/install/{safe_token}?app={kind}">Ver mi certificado y archivos ↗</a>
+<div class="foot">RANDY MOD © 2026 · PRIVATE ACCESS</div>
 </main><script>
 const app=window.Telegram?.WebApp;app?.ready();app?.expand();
+try{{app?.setHeaderColor?.('#030916');app?.setBackgroundColor?.('#030916');}}catch(e){{}}
 document.getElementById('install')?.addEventListener('click',()=>{{const link={json.dumps(launch_url)};if(app?.openLink)app.openLink(link,{{try_instant_view:false}});else window.open(link,'_blank');}});
 </script></body></html>'''.encode()
         self.send_response(200)
@@ -228,13 +257,12 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
                         if open_url else f'<p id="open-app" hidden>Cuando termine, abre {name} desde la pantalla de inicio.</p>')
         after_install = (f'<button id="installed" class="button" type="button" hidden>Ya terminó de instalar</button>'
                          + open_control + '<p id="install-note" hidden>Espera a que iOS termine la instalación. Esta página no puede comprobar si la app está instalada.</p>')
-        body = f'''<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#082318"><title>Instalar {name} · Randy Mod</title><style>
-*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,#1886537a,transparent 50%),#06150e;color:#f0fff4;font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}main{{max-width:420px;margin:auto;min-height:100vh;padding:44px 22px;text-align:center}}.brand{{letter-spacing:3px;color:#9be5b7;font-size:12px;font-weight:800}}img{{width:130px;height:130px;object-fit:cover;border-radius:32px;margin:62px auto 16px;box-shadow:0 0 0 15px #2bec901a,0 22px 70px #21dd8055}}h1{{font-size:35px;margin:15px 0 8px}}p{{color:#b9d7c5;line-height:1.5}}.button{{display:block;background:#33da8c;color:#08301e;text-decoration:none;border-radius:17px;padding:20px;margin:32px 0 16px;font-size:19px;font-weight:800}}.note{{border:1px solid #38845b;border-radius:17px;background:#123224;padding:18px;text-align:left;font-size:14px;line-height:1.6}}.secondary{{color:#a6dabb;font-size:13px}}
-</style><style>[hidden]{{display:none!important}}button.button{{width:100%;border:0}}</style></head><body><main><div class="brand">RANDY MOD / INSTALACIÓN PRIVADA</div><img src="/certificate/logo/{safe_token}/{kind}" alt="{name}"><h1>{name}</h1><p>Aplicación firmada para tu certificado. Toca instalar y confirma el aviso de iOS.</p><a id="install-app" class="button" href="{install_url}">Instalar {name} ↗</a>{after_install}<div class="note">Si no aparece el aviso, abre esta página en <b>Safari</b> con el menú Compartir y toca «Instalar {name}» otra vez. El certificado debe seguir vigente y pertenecer a este iPhone o iPad.</div><p class="secondary">El enlace y la IPA son privados para este pedido.</p></main><script>document.getElementById('install-app').addEventListener('click',()=>{{document.getElementById('installed').hidden=false;document.getElementById('install-note').hidden=false;}});document.getElementById('installed').addEventListener('click',()=>{{document.getElementById('open-app').hidden=false;document.getElementById('installed').hidden=true;}});</script></body></html>'''.encode()
+        body = f'''<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#030916"><title>Instalar {name} · Randy Mod</title><style>{_installer_style()}</style></head><body>{_installer_brand(safe_token)}
+<section class="app-panel"><div class="panel-label"><span>INSTALL / iOS</span><b>FIRMA PRIVADA</b></div><div class="orb"><img src="/certificate/logo/{safe_token}/{kind}" alt="Logo {name}" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="fallback" hidden>{'G' if kind == 'gbox' else 'E'}</span></div><h1>{name}</h1><div class="version">Continúa en tu dispositivo</div><div class="badge">FIRMA LISTA · TU EQUIPO</div><p class="hint">Toca instalar y confirma el aviso de iOS. Cuando termine, continúa para abrir {name}.</p><a id="install-app" class="button" href="{install_url}">Instalar {name} ↗</a>{after_install}<div class="workflow"><span><b>01</b> INSTALAR</span><span><b>02</b> CONFIRMAR</span><span><b>03</b> ABRIR</span></div></section><div class="note">Si no aparece el aviso, abre esta página en <b>Safari</b> con el menú Compartir y toca «Instalar {name}» otra vez. Usa el iPhone o iPad de tu certificado.</div><div class="foot">RANDY MOD © 2026 · PRIVATE ACCESS</div></main><script>document.getElementById('install-app').addEventListener('click',()=>{{document.getElementById('installed').hidden=false;document.getElementById('install-note').hidden=false;}});document.getElementById('installed').addEventListener('click',()=>{{document.getElementById('open-app').hidden=false;document.getElementById('installed').hidden=true;}});</script></body></html>'''.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "private, no-store")
-        self.send_header("Content-Security-Policy", "default-src 'self' data:; style-src 'unsafe-inline'; img-src 'self' data:")
+        self.send_header("Content-Security-Policy", "default-src 'self' data:; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -596,3 +624,4 @@ def start_health_server(event_loop: asyncio.AbstractEventLoop) -> BotHTTPServer:
     thread = threading.Thread(target=server.serve_forever, name="health-server", daemon=True)
     thread.start()
     return server
+
