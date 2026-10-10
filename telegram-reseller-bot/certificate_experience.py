@@ -317,7 +317,10 @@ async def certificate_callback(update, context):
     if action not in APPS:
         await query.answer("Opción inválida", show_alert=True)
         return
-    await send_app_choice(context.bot, order, action)
+    # Previously delivered messages still have callback buttons. Refresh that
+    # same message so they also stop creating an extra app card in the chat.
+    await query.answer(f"Toca {APPS[action]} para continuar")
+    await query.message.edit_reply_markup(reply_markup=app_selector_menu(order))
 
 
 bot.callback = certificate_callback

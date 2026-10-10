@@ -2,6 +2,7 @@ import io
 import os
 import unittest
 import zipfile
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123:TEST_TOKEN")
@@ -79,6 +80,17 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(buttons[0].web_app.url, "https://example.test/certificate/mini/private?app=gbox")
             self.assertIsNone(buttons[0].callback_data)
             self.assertEqual(buttons[1].callback_data, "certapp:sign_esign:41")
+
+    async def test_old_delivery_buttons_refresh_without_an_extra_chat_message(self):
+        order = {"id": 41, "user_id": 123, "status": "completed", "download_url": "private", "install_token": "private"}
+        query = SimpleNamespace(data='certapp:gbox:41', from_user=SimpleNamespace(id=123), answer=AsyncMock(), message=AsyncMock())
+        client = AsyncMock()
+        with patch.object(bot.db, 'certificate_order', return_value=order), patch.object(bot.db, 'renew_certificate_link', return_value=order), patch.object(bot.db, 'signed_certificate_app', return_value={'version':'6.1.2'}), patch.dict(os.environ, {'RENDER_EXTERNAL_URL':'https://example.test'}):
+            await experience.certificate_callback(SimpleNamespace(callback_query=query), SimpleNamespace(bot=client))
+        query.message.edit_reply_markup.assert_awaited_once()
+        self.assertEqual(query.message.edit_reply_markup.call_args.kwargs['reply_markup'].inline_keyboard[0][0].web_app.url, 'https://example.test/certificate/mini/private?app=gbox')
+        client.send_photo.assert_not_awaited()
+        client.send_message.assert_not_awaited()
 
 
 if __name__ == "__main__":
