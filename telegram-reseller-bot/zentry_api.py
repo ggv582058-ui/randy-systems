@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from typing import Any, Callable
@@ -85,6 +86,8 @@ class ZentryClient:
         return str(value)[:300] if value else ""
 
     def create_license(self, duration_days: int, prefix: str = "RANDY") -> str:
+        if type(duration_days) is not int or not 1 <= duration_days <= 3650:
+            raise ZentryError("Duración inválida: indica días enteros entre 1 y 3650")
         result = self._post(
             "/seller/v1/licenses/create",
             {"duration_type": "days", "duration_value": duration_days, "key_prefix": prefix},
@@ -93,7 +96,78 @@ class ZentryClient:
         key = data.strip() if isinstance(data, str) and data.strip() else self._find_license_key(result)
         if not key:
             raise ZentryError("ZentryAuth no devolvió la licencia creada")
+        self.verify_license_duration(key, duration_days)
         return key
+
+    @classmethod
+    def _duration_days(cls, payload: Any) -> int | None:
+        """Read total license duration, never the remaining time or local receipt."""
+        if not isinstance(payload, dict):
+            return None
+        values: list[int] = []
+        for field in ("lifetime", "is_lifetime", "isLifetime"):
+            if payload.get(field) is True or str(payload.get(field, "")).lower() in ("true", "1"):
+                values.append(0)
+        for field in ("duration_days", "durationDays"):
+            if field in payload:
+                value = payload[field]
+                if type(value) is int and value > 0:
+                    values.append(value)
+                elif isinstance(value, str) and value.isdigit() and int(value) > 0:
+                    values.append(int(value))
+                else:
+                    raise ZentryError("La API devolvió una duración inválida; operación detenida")
+        for field in ("duration_seconds", "durationSeconds"):
+            if field in payload:
+                value = payload[field]
+                if type(value) is not int or value <= 0 or value % 86400:
+                    raise ZentryError("La API devolvió una duración inválida; operación detenida")
+                values.append(value // 86400)
+        unit = str(payload.get("duration_type", payload.get("durationType", ""))).lower()
+        if unit in ("lifetime", "forever", "permanent"):
+            values.append(0)
+        elif unit:
+            amount = payload.get("duration_value", payload.get("durationValue"))
+            if isinstance(amount, str) and amount.isdigit():
+                amount = int(amount)
+            if type(amount) is int and amount > 0 and unit in ("day", "days", "week", "weeks"):
+                values.append(amount * (7 if unit.startswith("week") else 1))
+        duration = payload.get("duration")
+        if isinstance(duration, str):
+            duration = duration.strip().lower()
+            if duration in ("lifetime", "forever", "permanent", "unlimited"):
+                values.append(0)
+            else:
+                match = re.fullmatch(r"(\d+)\s*(days?|weeks?)", duration)
+                if match:
+                    values.append(int(match[1]) * (7 if match[2].startswith("week") else 1))
+                elif duration:
+                    # Month/year labels do not prove an exact number of days.
+                    raise ZentryError("La API no confirma la duración exacta en días; operación detenida")
+        for field in ("data", "result", "license"):
+            if isinstance(payload.get(field), dict):
+                nested = cls._duration_days(payload[field])
+                if nested is not None:
+                    values.append(nested)
+        if not values:
+            return None
+        if len(set(values)) != 1:
+            raise ZentryError("La API devolvió duraciones contradictorias; operación detenida")
+        return values[0]
+
+    def verify_license_duration(self, license_key: str, expected_days: int) -> None:
+        if type(expected_days) is not int or not 1 <= expected_days <= 3650:
+            raise ZentryError("Duración del producto inválida; operación detenida")
+        result = self.license_info(license_key)
+        returned_key = self._find_license_key(result)
+        if returned_key and returned_key != license_key:
+            raise ZentryError("La API respondió con otra licencia; operación detenida")
+        actual_days = self._duration_days(result)
+        if actual_days is None:
+            raise ZentryError("No se pudo verificar la duración real de la key; operación detenida")
+        if actual_days != expected_days:
+            actual = "lifetime" if actual_days == 0 else f"{actual_days} días"
+            raise ZentryError(f"Duración incorrecta: producto de {expected_days} días, API indica {actual}. No se entregó la key")
 
     @classmethod
     def _find_license_key(cls, payload: Any) -> str | None:

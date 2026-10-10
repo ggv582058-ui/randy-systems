@@ -26,13 +26,15 @@ class ZentryClientTests(unittest.TestCase):
 
         def opener(request, timeout):
             captured["headers"] = dict(request.header_items())
-            captured["payload"] = json.loads(request.data)
+            if request.full_url.endswith("/create"):
+                captured["payload"] = json.loads(request.data)
             captured["timeout"] = timeout
-            return FakeResponse({"success": True, "data": {"license_key": "RANDY-1234"}})
+            return FakeResponse({"success": True, "data": {"license_key": "RANDY-1234", "duration_days": 31}})
 
         client = ZentryClient("https://api.zentryauth.com", "seller", "secret", opener=opener)
         self.assertEqual(client.create_license(31, "RANDY"), "RANDY-1234")
         self.assertEqual(captured["payload"]["duration_value"], 31)
+        self.assertEqual(captured["payload"]["duration_type"], "days")
         self.assertEqual(captured["headers"]["X-seller-key"], "seller")
         self.assertEqual(captured["headers"]["X-seller-secret"], "secret")
 
@@ -57,7 +59,7 @@ class ZentryClientTests(unittest.TestCase):
 
         def opener(request, timeout):
             captured["headers"] = dict(request.header_items())
-            return FakeResponse({"success": True, "data": {"license_key": "RANDY-OK"}})
+            return FakeResponse({"success": True, "data": {"license_key": "RANDY-OK", "duration_days": 31}})
 
         client = ZentryClient(
             "https://api.zentryauth.com",
@@ -73,7 +75,7 @@ class ZentryClientTests(unittest.TestCase):
         client = ZentryClient(
             "https://api.zentryauth.com", "seller", "secret",
             opener=lambda _request, timeout: FakeResponse({
-                "success": True, "data": {"license": {"key": "RANDY-NESTED"}}
+                "success": True, "data": {"license": {"key": "RANDY-NESTED", "duration_days": 31}}
             }),
         )
         self.assertEqual(client.create_license(31), "RANDY-NESTED")
@@ -82,7 +84,7 @@ class ZentryClientTests(unittest.TestCase):
         client = ZentryClient(
             "https://api.zentryauth.com", "seller", "secret",
             opener=lambda _request, timeout: FakeResponse({
-                "success": True, "result": {"licenseKey": "RANDY-CAMEL"}
+                "success": True, "result": {"licenseKey": "RANDY-CAMEL", "duration_days": 31}
             }),
         )
         self.assertEqual(client.create_license(31), "RANDY-CAMEL")
@@ -90,7 +92,7 @@ class ZentryClientTests(unittest.TestCase):
     def test_create_license_accepts_string_data_response(self):
         client = ZentryClient(
             "https://api.zentryauth.com", "seller", "secret",
-            opener=lambda _request, timeout: FakeResponse({"success": True, "data": "RANDY-DIRECT"}),
+            opener=lambda _request, timeout: FakeResponse({"success": True, "data": "RANDY-DIRECT", "duration_days": 31}),
         )
         self.assertEqual(client.create_license(31), "RANDY-DIRECT")
 

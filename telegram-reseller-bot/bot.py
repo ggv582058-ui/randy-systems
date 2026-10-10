@@ -2974,12 +2974,26 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.answer("Usa el bot de revendedores", show_alert=True)
             return
         product_id = int(data.split(":")[1])
+        await query.answer("Verificando la compra…")
         try:
-            sale = db.purchase(query.from_user.id, product_id)
-        except (InsufficientBalance, OutOfStock, NotApproved, NotFound, ProductRestricted) as exc:
-            await query.answer(str(exc), show_alert=True)
+            if zentry.configured:
+                product = db.product_for_user(product_id, query.from_user.id)
+                if not product or not product["active"] or not product["allowed"]:
+                    raise ProductRestricted("Producto no disponible para tu cuenta")
+                candidate = db.purchase_candidate(product_id)
+                if candidate is None:
+                    raise OutOfStock("Producto sin stock")
+                await asyncio.to_thread(zentry.verify_license_duration,
+                                        candidate["secret_value"], int(candidate["duration_days"]))
+                sale = db.purchase(query.from_user.id, product_id,
+                                   expected_key_id=candidate["id"],
+                                   expected_duration_days=candidate["duration_days"])
+            else:
+                sale = db.purchase(query.from_user.id, product_id)
+        except (StoreError, ZentryError) as exc:
+            await query.message.reply_text(
+                f"❌ {html.escape(str(exc))}\nNo se descontó saldo.", parse_mode=ParseMode.HTML)
             return
-        await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
         await reply_with_icons(query.message, key_receipt_text(sale))
         if sale["file"]:

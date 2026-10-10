@@ -915,7 +915,17 @@ class Database:
             )
             return True, topup
 
-    def purchase(self, user_id: int, product_id: int) -> dict:
+    def purchase_candidate(self, product_id: int) -> sqlite3.Row | None:
+        with self.connect() as con:
+            return con.execute(
+                """SELECT k.id,k.secret_value,p.duration_days FROM inventory_keys k
+                   JOIN products p ON p.id=k.product_id
+                   WHERE k.product_id=? AND k.status='available' AND p.active=1
+                   ORDER BY k.id LIMIT 1""", (product_id,),
+            ).fetchone()
+
+    def purchase(self, user_id: int, product_id: int, *, expected_key_id: int | None = None,
+                 expected_duration_days: int | None = None) -> dict:
         with self.transaction() as con:
             user = con.execute("SELECT * FROM users WHERE telegram_id=?", (user_id,)).fetchone()
             if not user or user["role"] not in ("reseller", "admin"):
@@ -939,6 +949,9 @@ class Database:
             ).fetchone()
             if not key:
                 raise OutOfStock("Producto sin stock")
+            if ((expected_key_id is not None and key['id'] != expected_key_id)
+                    or (expected_duration_days is not None and product['duration_days'] != expected_duration_days)):
+                raise StoreError("El stock o la duración cambió durante la verificación. Intenta de nuevo; no se cobró saldo")
             price = con.execute(
                 "SELECT price_cents FROM reseller_prices WHERE user_id=? AND product_id=?",
                 (user_id, product_id),
