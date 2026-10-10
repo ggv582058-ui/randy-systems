@@ -30,6 +30,7 @@ from chungchi_api import ChungChiClient, ChungChiError
 from database import Database, InsufficientBalance, NotApproved, NotFound, OutOfStock, ProductRestricted, StoreError
 from health import HealthHandler, start_health_server
 from zentry_api import ZentryClient, ZentryError
+from admin_records import AdminRecords
 from typography import DeveloperBot, developer_text
 import emoji_style
 from emoji_style import GLOBAL_SLOTS
@@ -40,6 +41,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("randy-reseller")
 settings = load_settings()
 db = Database(settings.database_path)
+admin_records = AdminRecords(db)
 zentry = ZentryClient(
     settings.zentry_base_url,
     settings.zentry_seller_key,
@@ -58,7 +60,9 @@ ADMIN_MENU = ReplyKeyboardMarkup(
      [KeyboardButton("➕ Crear socio"), KeyboardButton("👥 Revendedores")],
      [KeyboardButton("💳 Recargas"), KeyboardButton("📢 Anuncio global")],
      [KeyboardButton("⚡ API Zentry"), KeyboardButton("🛡️ Control keys")],
-     [KeyboardButton("📊 Estadísticas"), KeyboardButton("🌐 Idioma / Language")]],
+     [KeyboardButton("📊 Estadísticas"), KeyboardButton("🌐 Idioma / Language")],
+     [KeyboardButton("👤 Clientes"), KeyboardButton("🍎 Certificados")],
+     [KeyboardButton("📚 Compras")]],
     resize_keyboard=True,
 )
 ADMIN_MENU_EN = ReplyKeyboardMarkup(
@@ -67,7 +71,9 @@ ADMIN_MENU_EN = ReplyKeyboardMarkup(
      [KeyboardButton("➕ Create partner"), KeyboardButton("👥 Resellers")],
      [KeyboardButton("💳 Top-ups"), KeyboardButton("📢 Global announcement")],
      [KeyboardButton("⚡ Zentry API"), KeyboardButton("🛡️ Key control")],
-     [KeyboardButton("📊 Statistics"), KeyboardButton("🌐 Language / Idioma")]],
+     [KeyboardButton("📊 Statistics"), KeyboardButton("🌐 Language / Idioma")],
+     [KeyboardButton("👤 Customers"), KeyboardButton("🍎 Certificates")],
+     [KeyboardButton("📚 Purchases")]],
     resize_keyboard=True,
 )
 VIP_ADMIN_MENU = ReplyKeyboardMarkup(
@@ -237,6 +243,9 @@ MENU_ACTION_LABELS = {
     "Estadísticas": "stats", "Statistics": "stats",
     "Iniciar sesión": "login", "Sign in": "login",
     "Solicitar acceso": "request", "Request access": "request",
+    "Clientes": "clients", "Customers": "clients",
+    "Certificados": "certificates", "Certificates": "certificates",
+    "Compras": "purchases", "Purchases": "purchases",
 }
 
 
@@ -347,7 +356,10 @@ def certificate_emoji(slot: str) -> str | None:
             for group, (_, markup) in EMOJI_MENU_GROUPS.items():
                 for row, buttons in enumerate(markup.keyboard):
                     for column, _ in enumerate(buttons):
-                        old_name = MENU_SLOT_NAMES[group][row][column]
+                        legacy = MENU_SLOT_NAMES[group]
+                        if row >= len(legacy) or column >= len(legacy[row]):
+                            continue
+                        old_name = legacy[row][column]
                         old_slot = old_name if group == "certificate" and old_name != "settings" else f"{group}_{old_name}"
                         if slot == old_slot and slot not in CERTIFICATE_EMOJI_DEFAULTS:
                             value = db.private_setting(f"certemoji:{group}_{row}_{column}")
@@ -1406,6 +1418,10 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 "⚙️ <b>Settings</b>", reply_markup=keys, parse_mode=ParseMode.HTML
             )
             return
+    if text in {b.text for m in (ADMIN_MENU, ADMIN_MENU_EN) for r in m.keyboard for b in r}:
+        context.user_data.pop("records_searching", None)
+    if await admin_records.menu(update, context, text):
+        return
     if await handle_flow(update, context):
         return
     if user["role"] not in ("reseller", "admin"):
@@ -2185,6 +2201,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = current_user(update)
     data = query.data or ""
     admin_panel = panel(context) == "admin"
+    if await admin_records.callback(update, context):
+        return
     if data.startswith("udid:use:"):
         await query.answer()
         await use_captured_udid(update, context, data.split(":", 2)[2])
