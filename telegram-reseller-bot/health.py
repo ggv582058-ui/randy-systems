@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
 from telegram import Update
+from app_signing import app_open_url
 
 
 log = logging.getLogger("randy-webhook")
@@ -169,7 +170,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         safe_token = html.escape(token, quote=True)
         name = "GBox" if kind == "gbox" else "ESign"
         launch_url = f"{base}/certificate/launch/{safe_token}?app={kind}"
-        main_button = (f'<button id="install" class="install" type="button">Continuar a Safari <span>↗</span></button>'
+        main_button = (f'<button id="install" class="install" type="button">Instalar {name} <span>↗</span></button>'
                        if signed and base.startswith("https://") else
                        f'<div class="waiting">La firma de la app aún no está lista. Vuelve al bot y toca <b>Preparar {name}</b>.</div>')
         body = f'''<!doctype html><html lang="es"><head><meta charset="utf-8">
@@ -210,7 +211,8 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
             return
         server: BotHTTPServer = self.server
         order = server.certificate_lookup(token) if server.certificate_lookup else None
-        if not order or order["status"] != "completed" or not server.certificate_signed_lookup or not server.certificate_signed_lookup(order["id"], kind):
+        signed = server.certificate_signed_lookup(order["id"], kind) if order and server.certificate_signed_lookup else None
+        if not order or order["status"] != "completed" or not signed:
             self.send_error(404, "App firmada no disponible o enlace vencido")
             return
         base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
@@ -221,9 +223,14 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
         name = "GBox" if kind == "gbox" else "ESign"
         manifest = f"{base}/certificate/manifest/{token}/{kind}.plist"
         install_url = html.escape("itms-services://?action=download-manifest&url=" + quote(manifest, safe=""), quote=True)
+        open_url = app_open_url(signed["ipa"], kind)
+        open_control = (f'<a id="open-app" class="button" href="{html.escape(open_url, quote=True)}" hidden>Abrir {name}</a>'
+                        if open_url else f'<p id="open-app" hidden>Cuando termine, abre {name} desde la pantalla de inicio.</p>')
+        after_install = (f'<button id="installed" class="button" type="button" hidden>Ya terminó de instalar</button>'
+                         + open_control + '<p id="install-note" hidden>Espera a que iOS termine la instalación. Esta página no puede comprobar si la app está instalada.</p>')
         body = f'''<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#082318"><title>Instalar {name} · Randy Mod</title><style>
 *{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,#1886537a,transparent 50%),#06150e;color:#f0fff4;font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}main{{max-width:420px;margin:auto;min-height:100vh;padding:44px 22px;text-align:center}}.brand{{letter-spacing:3px;color:#9be5b7;font-size:12px;font-weight:800}}img{{width:130px;height:130px;object-fit:cover;border-radius:32px;margin:62px auto 16px;box-shadow:0 0 0 15px #2bec901a,0 22px 70px #21dd8055}}h1{{font-size:35px;margin:15px 0 8px}}p{{color:#b9d7c5;line-height:1.5}}.button{{display:block;background:#33da8c;color:#08301e;text-decoration:none;border-radius:17px;padding:20px;margin:32px 0 16px;font-size:19px;font-weight:800}}.note{{border:1px solid #38845b;border-radius:17px;background:#123224;padding:18px;text-align:left;font-size:14px;line-height:1.6}}.secondary{{color:#a6dabb;font-size:13px}}
-</style></head><body><main><div class="brand">RANDY MOD / INSTALACIÓN PRIVADA</div><img src="/certificate/logo/{safe_token}/{kind}" alt="{name}"><h1>{name}</h1><p>Aplicación firmada para tu certificado. Toca instalar y confirma el aviso de iOS.</p><a class="button" href="{install_url}">Instalar {name} ↗</a><div class="note">Si no aparece el aviso, abre esta página en <b>Safari</b> con el menú Compartir y toca «Instalar {name}» otra vez. El certificado debe seguir vigente y pertenecer a este iPhone o iPad.</div><p class="secondary">El enlace y la IPA son privados para este pedido.</p></main></body></html>'''.encode()
+</style><style>[hidden]{{display:none!important}}button.button{{width:100%;border:0}}</style></head><body><main><div class="brand">RANDY MOD / INSTALACIÓN PRIVADA</div><img src="/certificate/logo/{safe_token}/{kind}" alt="{name}"><h1>{name}</h1><p>Aplicación firmada para tu certificado. Toca instalar y confirma el aviso de iOS.</p><a id="install-app" class="button" href="{install_url}">Instalar {name} ↗</a>{after_install}<div class="note">Si no aparece el aviso, abre esta página en <b>Safari</b> con el menú Compartir y toca «Instalar {name}» otra vez. El certificado debe seguir vigente y pertenecer a este iPhone o iPad.</div><p class="secondary">El enlace y la IPA son privados para este pedido.</p></main><script>document.getElementById('install-app').addEventListener('click',()=>{{document.getElementById('installed').hidden=false;document.getElementById('install-note').hidden=false;}});document.getElementById('installed').addEventListener('click',()=>{{document.getElementById('open-app').hidden=false;document.getElementById('installed').hidden=true;}});</script></body></html>'''.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "private, no-store")

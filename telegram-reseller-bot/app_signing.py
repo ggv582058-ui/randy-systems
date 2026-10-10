@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 import plistlib
+import re
 import subprocess
 import tempfile
 import zipfile
@@ -18,6 +19,27 @@ ZSIGN_REVISION = "614caa8d1ca949e260e5746144aa52d27a4b08d6"
 
 class SigningError(ValueError):
     pass
+
+
+def app_open_url(data: bytes, kind: str) -> str | None:
+    """Use only an app-specific scheme declared by the installed IPA itself."""
+    if kind not in KINDS:
+        return None
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for entry in archive.infolist():
+                if not (entry.filename.startswith("Payload/") and entry.filename.count("/") == 2
+                        and entry.filename.endswith(".app/Info.plist") and entry.file_size <= 1024 * 1024):
+                    continue
+                info = plistlib.loads(archive.read(entry))
+                for url_type in info.get("CFBundleURLTypes", []):
+                    for scheme in url_type.get("CFBundleURLSchemes", []):
+                        if (isinstance(scheme, str) and kind in scheme.lower()
+                                and re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]{0,79}", scheme)):
+                            return scheme + "://"
+    except (ValueError, TypeError, AttributeError, KeyError, zipfile.BadZipFile, OSError):
+        pass
+    return None
 
 
 def ipa_info(data: bytes) -> tuple[str, str]:

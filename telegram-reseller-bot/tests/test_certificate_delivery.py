@@ -54,7 +54,7 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("secret", events[2][1][1])
         buttons = events[3][2]["reply_markup"].inline_keyboard
         self.assertEqual([button.callback_data for button in buttons[0]],
-                         ["certapp:gbox:41", "certapp:esign:41"])
+                         ["certapp:sign_gbox:41", "certapp:sign_esign:41"])
         self.assertIn("/certificate/install/private", buttons[-1][0].url)
         with patch.object(bot.db, "signed_certificate_app", return_value={"version": "6.1.2"}), \
              patch.dict("os.environ", {"RENDER_EXTERNAL_URL": "https://example.test"}):
@@ -66,11 +66,19 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
         marked.assert_called_once_with(41)
 
     def test_emoji_ids_can_be_assigned_to_app_buttons(self):
-        with patch.object(bot, "certificate_emoji", side_effect=lambda slot: "5319007286004299794" if slot == "gbox" else None):
+        with patch.object(bot.db, "signed_certificate_app", return_value=None), patch.object(bot, "certificate_emoji", side_effect=lambda slot: "5319007286004299794" if slot == "gbox" else None):
             buttons = experience.app_selector_menu({"id": 41, "install_token": "private"}).inline_keyboard[0]
         self.assertEqual(buttons[0].icon_custom_emoji_id, "5319007286004299794")
         self.assertEqual(buttons[0].text, "GBox")
         self.assertEqual(buttons[1].text, "🔷 ESign")
+
+    def test_ready_app_opens_mini_directly_and_unprepared_app_starts_signing(self):
+        for custom_icons in (True, False):
+            with patch.object(bot.db, "signed_certificate_app", side_effect=lambda oid, kind: {"version": "6.1.2"} if kind == "gbox" else None), patch.dict(os.environ, {"RENDER_EXTERNAL_URL": "https://example.test"}):
+                buttons = experience.app_selector_menu({"id": 41, "install_token": "private"}, custom_icons).inline_keyboard[0]
+            self.assertEqual(buttons[0].web_app.url, "https://example.test/certificate/mini/private?app=gbox")
+            self.assertIsNone(buttons[0].callback_data)
+            self.assertEqual(buttons[1].callback_data, "certapp:sign_esign:41")
 
 
 if __name__ == "__main__":

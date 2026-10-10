@@ -147,14 +147,18 @@ async def send_app_choice(tg_bot, order, kind="gbox"):
 def app_selector_menu(order, custom_icons=True):
     order_id = int(order["id"])
     base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    def destination(kind):
+        if base.startswith("https://") and bot.db.signed_certificate_app(order_id, kind):
+            return {"web_app": WebAppInfo(f"{base}/certificate/mini/{order['install_token']}?app={kind}")}
+        return {"callback_data": f"certapp:sign_{kind}:{order_id}"}
     rows = [[InlineKeyboardButton(
         "GBox" if custom_icons and bot.certificate_emoji("gbox") else "🟩 GBox",
-        callback_data=f"certapp:gbox:{order_id}",
+        **destination("gbox"),
         icon_custom_emoji_id=bot.certificate_emoji("gbox") if custom_icons else None,
         style="primary" if custom_icons else None,
     ), InlineKeyboardButton(
         "ESign" if custom_icons and bot.certificate_emoji("esign") else "🔷 ESign",
-        callback_data=f"certapp:esign:{order_id}",
+        **destination("esign"),
         icon_custom_emoji_id=bot.certificate_emoji("esign") if custom_icons else None,
         style="primary" if custom_icons else None,
     )]]
@@ -259,7 +263,7 @@ async def certificate_callback(update, context):
                 parse_mode=ParseMode.HTML,
                 reply_markup=app_menu(order, kind))
             try:
-                await query.message.edit_reply_markup(reply_markup=app_menu(order, kind))
+                await query.message.edit_reply_markup(reply_markup=app_selector_menu(order))
             except Exception:
                 log.info("No se pudo actualizar el botón de instalación del pedido %s", order_id)
         except SigningError as exc:

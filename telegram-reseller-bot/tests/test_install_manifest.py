@@ -64,7 +64,7 @@ class InstallManifestTests(unittest.TestCase):
         with patch.dict(os.environ, {"RENDER_EXTERNAL_URL": "https://example.test"}):
             with urlopen(self.base + "/certificate/mini/private?app=esign") as response:
                 page = response.read().decode()
-            self.assertIn('Continuar a Safari', page)
+            self.assertIn('Instalar ESign', page)
             self.assertIn('/certificate/launch/private?app=esign', page)
             self.assertNotIn('itms-services://', page)
             self.assertIn('/certificate/logo/private/esign', page)
@@ -72,6 +72,8 @@ class InstallManifestTests(unittest.TestCase):
                 launch = response.read().decode()
             self.assertIn('Instalar ESign', launch)
             self.assertIn('itms-services://', launch)
+            self.assertIn('Ya terminó de instalar', launch)
+            self.assertIn('abre ESign desde la pantalla de inicio', launch)
             with urlopen(self.base + "/certificate/mini/private?app=gbox") as response:
                 waiting = response.read().decode()
             self.assertNotIn('itms-services://', waiting)
@@ -80,6 +82,19 @@ class InstallManifestTests(unittest.TestCase):
                 with self.assertRaises(HTTPError) as failure:
                     urlopen(self.base + url)
                 self.assertEqual(failure.exception.code, 404)
+
+    def test_open_button_uses_scheme_from_signed_ipa(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, 'w') as z:
+            z.writestr('Payload/ESign.app/Info.plist', plistlib.dumps({
+                'CFBundleURLTypes': [{'CFBundleURLSchemes': ['esign-demo']}]}))
+        self.server.certificate_signed_lookup = lambda oid, kind: {'ipa': archive.getvalue()}
+        with patch.dict(os.environ, {'RENDER_EXTERNAL_URL': 'https://example.test'}):
+            with urlopen(self.base + '/certificate/launch/private?app=esign') as response:
+                page = response.read().decode()
+        self.assertIn('href="esign-demo://" hidden>Abrir ESign', page)
+        self.assertIn("document.getElementById('open-app').hidden=false", page)
+        self.assertNotIn('setTimeout', page)
 
     def test_esign_import_requires_secret_and_validates_source(self):
         archive = io.BytesIO()
