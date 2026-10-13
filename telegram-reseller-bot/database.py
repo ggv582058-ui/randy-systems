@@ -300,6 +300,19 @@ class Database:
                     PRIMARY KEY(order_id,kind)
                 );
 
+                CREATE TABLE IF NOT EXISTS external_client_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(telegram_id),
+                    secret_value TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    name TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    source TEXT NOT NULL CHECK(source IN ('api','admin')),
+                    assigned_by INTEGER NOT NULL REFERENCES users(telegram_id),
+                    created_at TEXT NOT NULL,
+                    checked_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_external_keys_user ON external_client_keys(user_id,id DESC);
+
                 CREATE TABLE IF NOT EXISTS daily_announcements (
                     id INTEGER PRIMARY KEY CHECK(id = 1),
                     body TEXT NOT NULL,
@@ -997,6 +1010,55 @@ class Database:
                 "file": con.execute("SELECT file_id,file_name,file_data FROM product_files WHERE product_id=?", (product_id,)).fetchone(),
                 "media": con.execute("SELECT * FROM product_media WHERE product_id=?", (product_id,)).fetchone(),
             }
+
+    def link_external_key(self, user_id: int, key: str, name: str, expires_at: str,
+                          source: str, admin_id: int) -> sqlite3.Row:
+        expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        if expires.tzinfo is None or source not in ("api", "admin"):
+            raise ValueError("Vencimiento o fuente inválidos")
+        expires_at = expires.astimezone(timezone.utc).isoformat(timespec="seconds")
+        key = key.strip()
+        if not 4 <= len(key) <= 200 or not 1 <= len(name.strip()) <= 100:
+            raise ValueError("Key o producto inválidos")
+        with self.transaction() as con:
+            admin = con.execute("SELECT role FROM users WHERE telegram_id=?", (admin_id,)).fetchone()
+            if not admin or admin["role"] != "admin":
+                raise NotApproved("Solo Admin puede vincular keys externas")
+            if not con.execute("SELECT 1 FROM users WHERE telegram_id=?", (user_id,)).fetchone():
+                raise NotFound("Cliente no encontrado")
+            if con.execute("SELECT 1 FROM inventory_keys WHERE secret_value=? COLLATE NOCASE", (key,)).fetchone():
+                raise StoreError("La key ya está registrada en el inventario del bot")
+            existing = con.execute("SELECT * FROM external_client_keys WHERE secret_value=? COLLATE NOCASE", (key,)).fetchone()
+            if existing and existing["user_id"] != user_id:
+                raise StoreError("La key ya está vinculada a otro cliente")
+            now = utcnow()
+            con.execute("""INSERT INTO external_client_keys(user_id,secret_value,name,expires_at,source,assigned_by,created_at,checked_at)
+                VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(secret_value) DO UPDATE SET
+                name=excluded.name,expires_at=excluded.expires_at,source=excluded.source,
+                assigned_by=excluded.assigned_by,checked_at=excluded.checked_at""",
+                (user_id,key,name.strip(),expires_at,source,admin_id,now,now))
+            return con.execute("SELECT * FROM external_client_keys WHERE secret_value=? COLLATE NOCASE", (key,)).fetchone()
+
+    def external_keys_for_user(self, user_id: int, limit: int = 25) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            return con.execute("SELECT * FROM external_client_keys WHERE user_id=? ORDER BY id DESC LIMIT ?", (user_id,limit)).fetchall()
+
+    def external_key(self, key_id: int, user_id: int) -> sqlite3.Row | None:
+        with self.connect() as con:
+            return con.execute("SELECT * FROM external_client_keys WHERE id=? AND user_id=?", (key_id,user_id)).fetchone()
+
+    def external_key_by_value(self, key: str, user_id: int) -> sqlite3.Row | None:
+        with self.connect() as con:
+            return con.execute("SELECT * FROM external_client_keys WHERE secret_value=? COLLATE NOCASE AND user_id=?", (key.strip(),user_id)).fetchone()
+
+    def refresh_external_key(self, key_id: int, user_id: int, expires_at: str) -> sqlite3.Row | None:
+        expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        if expires.tzinfo is None:
+            raise ValueError("Falta zona horaria del vencimiento")
+        with self.transaction() as con:
+            con.execute("UPDATE external_client_keys SET expires_at=?,source='api',checked_at=? WHERE id=? AND user_id=?",
+                (expires.astimezone(timezone.utc).isoformat(timespec="seconds"),utcnow(),key_id,user_id))
+            return con.execute("SELECT * FROM external_client_keys WHERE id=? AND user_id=?", (key_id,user_id)).fetchone()
 
     def user_keys(self, user_id: int, limit: int = 25) -> list[sqlite3.Row]:
         with self.connect() as con:

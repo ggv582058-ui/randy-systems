@@ -38,6 +38,7 @@ def client_text(row):
         f'Compras de productos: <b>{row["product_count"]}</b>\n'
         f'Keys de certificado compradas: <b>{row["certificate_key_count"]}</b>\n'
         f'Certificados registrados: <b>{row["certificate_count"]}</b>\n'
+        f'Keys externas vinculadas: <b>{row["external_key_count"]}</b>\n'
         f'Total comprado: <b>{money(row["spent_cents"])}</b>'
     )
 
@@ -77,6 +78,7 @@ class AdminRecords:
                 (SELECT COUNT(*) FROM orders WHERE user_id=u.telegram_id) product_count,
                 (SELECT COUNT(*) FROM certificate_keys WHERE user_id=u.telegram_id) certificate_key_count,
                 (SELECT COUNT(*) FROM certificate_orders WHERE user_id=u.telegram_id) certificate_count,
+                (SELECT COUNT(*) FROM external_client_keys WHERE user_id=u.telegram_id) external_key_count,
                 COALESCE((SELECT -SUM(amount_cents) FROM ledger WHERE user_id=u.telegram_id AND kind='purchase'),0) spent_cents
                 FROM users u WHERE telegram_id=?''', (uid,)).fetchone()
 
@@ -217,6 +219,8 @@ class AdminRecords:
                 else:
                     uid=row['telegram_id']
                     await self.send(query.message,client_text(row),[
+                        [InlineKeyboardButton('🔑 Vincular key externa',callback_data=f'extkey:add:{uid}')],
+                        [InlineKeyboardButton('Keys externas del cliente',callback_data=f'extkey:list:{uid}')],
                         [InlineKeyboardButton('Certificados del cliente',callback_data=f'records:list:certificates:0:{uid}')],
                         [InlineKeyboardButton('Historial de compras',callback_data=f'records:list:purchases:0:{uid}')],
                         [InlineKeyboardButton('Volver a clientes',callback_data='records:list:clients:0:all')]])

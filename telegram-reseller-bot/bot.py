@@ -31,6 +31,7 @@ from database import Database, InsufficientBalance, NotApproved, NotFound, OutOf
 from health import HealthHandler, start_health_server
 from zentry_api import ZentryClient, ZentryError
 from admin_records import AdminRecords
+from external_keys import ExternalKeys
 from typography import DeveloperBot, developer_text
 import emoji_style
 from emoji_style import GLOBAL_SLOTS
@@ -47,6 +48,7 @@ zentry = ZentryClient(
     settings.zentry_seller_key,
     settings.zentry_seller_secret,
 )
+external_keys = ExternalKeys(db, zentry)
 chungchi = ChungChiClient(settings.chungchi_base_url, settings.chungchi_api_key)
 _delivery_in_progress: set[int] = set()
 _delivery_retry_after: dict[int, float] = {}
@@ -816,12 +818,15 @@ async def show_history(update: Update) -> None:
 async def show_my_keys(update: Update) -> None:
     language = language_of(current_user(update))
     rows = db.user_keys(update.effective_user.id)
-    if not rows:
+    linked = db.external_keys_for_user(update.effective_user.id)
+    if not rows and not linked:
         text = "🔑 <b>My keys</b>\nYou have not purchased any keys yet." if language == "en" else "🔑 <b>Mis keys</b>\nTodavía no has comprado ninguna key."
         await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
         return
     for row in rows:
         await send_key_status(update.effective_message, row, language)
+    for row in linked:
+        await external_keys.send_status(update.effective_message, row, language)
 
 
 def new_certificate_key() -> str:
@@ -1428,6 +1433,8 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context.user_data.pop("records_searching", None)
     if await admin_records.menu(update, context, text):
         return
+    if await external_keys.handle_text(update, context):
+        return
     if await handle_flow(update, context):
         return
     if user["role"] not in ("reseller", "admin"):
@@ -1603,6 +1610,10 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, text_o
             return True
         row = db.user_key(message.from_user.id, text)
         context.user_data.pop("flow", None)
+        linked = db.external_key_by_value(text, message.from_user.id)
+        if linked:
+            await external_keys.send_status(message, linked, language)
+            return True
         if row:
             await send_key_status(message, row, language)
             return True
@@ -2207,6 +2218,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = current_user(update)
     data = query.data or ""
     admin_panel = panel(context) == "admin"
+    if await external_keys.callback(update, context):
+        return
     if await admin_records.callback(update, context):
         return
     if data.startswith("udid:use:"):
