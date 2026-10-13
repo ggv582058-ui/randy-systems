@@ -32,6 +32,7 @@ from health import HealthHandler, start_health_server
 from zentry_api import ZentryClient, ZentryError
 from admin_records import AdminRecords
 from external_keys import ExternalKeys
+from stock_keys import StockKeys
 from typography import DeveloperBot, developer_text
 import emoji_style
 from emoji_style import GLOBAL_SLOTS
@@ -43,6 +44,7 @@ log = logging.getLogger("randy-reseller")
 settings = load_settings()
 db = Database(settings.database_path)
 admin_records = AdminRecords(db)
+stock_keys = StockKeys(db)
 zentry = ZentryClient(
     settings.zentry_base_url,
     settings.zentry_seller_key,
@@ -704,6 +706,7 @@ async def show_products_admin(update: Update) -> None:
         rows.append([InlineKeyboardButton(
             f"{'Desactivar' if p['active'] else 'Activar'} · {p['name']}", callback_data=f"product:toggle:{p['id']}"
         ), InlineKeyboardButton("✏️ Editar", callback_data=f"product:edit:{p['id']}")])
+        rows.append([InlineKeyboardButton("🔑 Gestionar / quitar keys", callback_data=f"stockkeys:list:{p['id']}:0:0")])
         mode = "Stock manual" if product_key_mode(p["id"]) == "manual" else "Verificar ZentryAuth"
         rows.append([InlineKeyboardButton(f"🔧 Entrega: {mode}", callback_data=f"product:keymode:{p['id']}")])
     await update.effective_message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
@@ -2218,6 +2221,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = current_user(update)
     data = query.data or ""
     admin_panel = panel(context) == "admin"
+    if await stock_keys.callback(update, context):
+        return
     if await external_keys.callback(update, context):
         return
     if await admin_records.callback(update, context):
