@@ -77,7 +77,7 @@ def load_settings() -> Settings:
         paypal_url=os.getenv("PAYPAL_URL", "").strip(),
         key_api_url=os.getenv("KEY_API_URL", "").strip(),
         key_api_token=os.getenv("KEY_API_TOKEN", "").strip(),
-        zentry_base_url=os.getenv("ZENTRY_BASE_URL", "https://api.zentryauth.com").strip().rstrip("/"),
+        zentry_base_url=os.getenv("ZENTRY_BASE_URL", "https://zentryauth.com/api/seller/v1").strip().rstrip("/"),
         zentry_seller_key=_compact_secret(os.getenv("ZENTRY_SELLER_KEY", "")),
         zentry_seller_secret=_compact_secret(os.getenv("ZENTRY_SELLER_SECRET", "")),
         zentry_key_prefix=os.getenv("ZENTRY_KEY_PREFIX", "RANDY").strip() or "RANDY",

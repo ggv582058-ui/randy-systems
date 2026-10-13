@@ -20,7 +20,13 @@ class ZentryClient:
         timeout: int = 20,
         opener: Callable[..., Any] = urllib.request.urlopen,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = base_url.strip().rstrip("/")
+        # The application panel publishes the Seller API separately from the
+        # client activation API. Migrate the old default without changing keys.
+        if self.base_url in ("https://api.zentryauth.com", "https://api.zentryauth.com/v1",
+                             "https://api.zentryauth.com/seller/v1", "https://zentryauth.com",
+                             "https://zentryauth.com/seller/v1"):
+            self.base_url = "https://zentryauth.com/api/seller/v1"
         # Mobile copy/paste can insert newlines into long credentials. Seller
         # credentials never contain whitespace, so normalize them before they
         # become HTTP headers.
@@ -36,8 +42,11 @@ class ZentryClient:
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.configured:
             raise ZentryError("Faltan ZENTRY_SELLER_KEY y ZENTRY_SELLER_SECRET en Render")
+        # Accept the full Seller base copied from the panel as well as an
+        # origin/API base; never duplicate /seller/v1 in a request URL.
+        suffix = path[len("/seller/v1"):] if self.base_url.endswith("/seller/v1") and path.startswith("/seller/v1/") else path
         request = urllib.request.Request(
-            f"{self.base_url}{path}",
+            f"{self.base_url}{suffix}",
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Accept": "application/json",
