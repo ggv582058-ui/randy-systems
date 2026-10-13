@@ -685,6 +685,10 @@ async def show_buy(update: Update) -> None:
         )
 
 
+def product_key_mode(product_id: int) -> str:
+    return "manual" if db.private_setting(f"product_key_mode:{product_id}") == "manual" else "api"
+
+
 async def show_products_admin(update: Update) -> None:
     products = db.products(active_only=False)
     lines = ["📦 <b>Catálogo</b>"]
@@ -698,6 +702,8 @@ async def show_products_admin(update: Update) -> None:
         rows.append([InlineKeyboardButton(
             f"{'Desactivar' if p['active'] else 'Activar'} · {p['name']}", callback_data=f"product:toggle:{p['id']}"
         ), InlineKeyboardButton("✏️ Editar", callback_data=f"product:edit:{p['id']}")])
+        mode = "Stock manual" if product_key_mode(p["id"]) == "manual" else "Verificar ZentryAuth"
+        rows.append([InlineKeyboardButton(f"🔧 Entrega: {mode}", callback_data=f"product:keymode:{p['id']}")])
     await update.effective_message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
 
 
@@ -2731,6 +2737,50 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     raise
         return
 
+    if data.startswith("product:keymode:"):
+        if not admin_panel or not is_admin(query.from_user.id):
+            await query.answer("Solo Admin en el bot privado", show_alert=True)
+            return
+        parts = data.split(":")
+        try:
+            product_id = int(parts[2])
+        except (ValueError, IndexError):
+            await query.answer("Producto inválido", show_alert=True)
+            return
+        product = db.product(product_id)
+        if not product:
+            await query.answer("Producto no encontrado", show_alert=True)
+            return
+        if len(parts) == 4:
+            mode = parts[3]
+            if mode not in ("manual", "api"):
+                await query.answer("Modo inválido", show_alert=True)
+                return
+            db.set_private_setting(f"product_key_mode:{product_id}", mode)
+            log.info("Admin %s configuró entrega %s para producto %s", query.from_user.id, mode, product_id)
+            await query.answer("Modo guardado")
+            label = "Stock manual" if mode == "manual" else "Verificar ZentryAuth"
+            await query.message.reply_text(
+                f"✅ <b>{html.escape(product['name'])}</b> · {label}\n"
+                + ("Puedes cargar las keys que generas desde la PC. Las compras usarán ese stock sin consultar ZentryAuth. "
+                   "La duración real de las keys se configura en su proveedor; este modo no la modifica."
+                   if mode == "manual" else "Las compras volverán a comprobar la duración real en ZentryAuth antes de cobrar."),
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔑 Añadir keys", callback_data=f"addkeys:{product_id}")],
+                    [InlineKeyboardButton("Cambiar modo de entrega", callback_data=f"product:keymode:{product_id}")]]))
+        else:
+            await query.answer()
+            await query.message.reply_text(
+                f"🔧 <b>Entrega · {html.escape(product['name'])}</b>\n"
+                "Stock manual: tú generas las keys y las cargas al producto. El bot entrega una key del stock por compra.\n"
+                "Verificar ZentryAuth: consulta la duración real mediante la API antes de cobrar.\n\n"
+                "En stock manual, comprueba en el proveedor que las keys correspondan a los días de este producto.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📦 Stock manual · sin consulta API", callback_data=f"product:keymode:{product_id}:manual")],
+                    [InlineKeyboardButton("⚡ Verificar ZentryAuth", callback_data=f"product:keymode:{product_id}:api")]]))
+        return
+
     if data.startswith("product:editfield:"):
         if not admin_panel or not is_admin(query.from_user.id):
             await query.answer("Solo Admin", show_alert=True)
@@ -2994,7 +3044,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         product_id = int(data.split(":")[1])
         await query.answer("Verificando la compra…")
         try:
-            if zentry.configured:
+            if zentry.configured and product_key_mode(product_id) != "manual":
                 product = db.product_for_user(product_id, query.from_user.id)
                 if not product or not product["active"] or not product["allowed"]:
                     raise ProductRestricted("Producto no disponible para tu cuenta")
