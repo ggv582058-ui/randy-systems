@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import ffmpegPath from 'ffmpeg-static'
 import sharp from 'sharp'
@@ -141,7 +141,7 @@ function writeUInt24LE(buffer, value, offset) {
 }
 
 function buildStickerExif(pack, author) {
-  const metadata = Buffer.from(JSON.stringify({ 'sticker-pack-id': 'randy-systems', 'sticker-pack-name': pack, 'sticker-pack-publisher': author, emojis: ['⚡'] }), 'utf8')
+  const metadata = Buffer.from(JSON.stringify({ 'sticker-pack-id': `randy-${createHash('sha256').update(JSON.stringify([pack, author])).digest('hex').slice(0, 32)}`, 'sticker-pack-name': pack, 'sticker-pack-publisher': author, emojis: ['⚡'] }), 'utf8')
   const exif = Buffer.concat([Buffer.from([0x49,0x49,0x2a,0x00,0x08,0x00,0x00,0x00,0x01,0x00,0x41,0x57,0x07,0x00,0x00,0x00,0x00,0x00,0x16,0x00,0x00,0x00]), metadata])
   exif.writeUInt32LE(metadata.length, 14)
   return exif
