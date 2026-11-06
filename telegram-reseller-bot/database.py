@@ -63,26 +63,103 @@ class Database:
         con.execute("PRAGMA journal_mode=WAL")
         return con
 
-    def backup(self, keep: int = 10) -> Path | None:
-        """Create a consistent on-disk backup before startup migrations."""
+    def backup(self, keep: int = 3) -> Path | None:
+        """Create safe, bounded SQLite backups without exhausting persistent storage.
+
+        Preserve the live database and at least one existing snapshot. Do not
+        touch customer data, WAL files, or other files outside backups/.
+        """
+        import logging
+        import shutil
+
+        logger = logging.getLogger(__name__)
         source_path = Path(self.path)
-        if not source_path.exists() or source_path.stat().st_size == 0:
+        if not source_path.is_file() or source_path.stat().st_size == 0:
             return None
+
         backup_dir = source_path.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
+
+        # Only files explicitly marked as interrupted snapshots can be
+        # discarded unconditionally. Incomplete copies from older versions
+        # may still have a .db extension, so keep the newest .db file.
+        for partial in backup_dir.glob(f"{source_path.stem}-*.db.partial"):
+            try:
+                partial.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Unable to remove interrupted backup %s: %s", partial.name, exc)
+
+        backups = sorted(backup_dir.glob(f"{source_path.stem}-*.db"), reverse=True)
+
+        # Rotate before allocating another database-sized copy.
+        for old in backups[max(1, keep - 1):]:
+            try:
+                old.unlink(missing_ok=True)
+                logger.info("Rotated older backup: %s", old.name)
+            except OSError as exc:
+                logger.warning("Could not rotate backup %s: %s", old.name, exc)
+
+        backups = sorted(backup_dir.glob(f"{source_path.stem}-*.db"), reverse=True)
+        db_size = source_path.stat().st_size
+        reserve = max(64 * 1024 * 1024, min(256 * 1024 * 1024, db_size // 10))
+        needed = db_size + reserve
+
+        try:
+            free = shutil.disk_usage(backup_dir).free
+        except OSError as exc:
+            logger.error("Unable to check free disk space before backup: %s", exc)
+            return None
+
+        # On a nearly full disk, keep the newest prior snapshot while
+        # reclaiming older snapshots. Never delete the last previous backup.
+        for old in reversed(backups[1:]):
+            if free >= needed:
+                break
+            try:
+                old.unlink(missing_ok=True)
+                free = shutil.disk_usage(backup_dir).free
+                logger.warning("Low disk space: removed an older backup %s", old.name)
+            except OSError as exc:
+                logger.error("Could not reclaim disk space from %s: %s", old.name, exc)
+
+        if free < needed:
+            logger.error(
+                "Backup skipped safely: free=%d MiB; need=%d MiB. "
+                "Live database and latest older backup were not deleted.",
+                free // (1024 * 1024), needed // (1024 * 1024),
+            )
+            return None
+
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         backup_path = backup_dir / f"{source_path.stem}-{stamp}.db"
-        source = sqlite3.connect(self.path, timeout=30)
-        destination = sqlite3.connect(backup_path)
+        partial_path = backup_dir / f"{source_path.stem}-{stamp}.db.partial"
+        source = destination = None
+        complete = False
         try:
+            source = sqlite3.connect(self.path, timeout=30)
+            destination = sqlite3.connect(partial_path)
             source.backup(destination)
-        finally:
             destination.close()
+            destination = None
             source.close()
-        backups = sorted(backup_dir.glob(f"{source_path.stem}-*.db"), reverse=True)
-        for old in backups[max(1, keep):]:
-            old.unlink(missing_ok=True)
-        return backup_path
+            source = None
+            os.replace(partial_path, backup_path)
+            complete = True
+            logger.info("Database backup completed: %s", backup_path.name)
+            return backup_path
+        except (sqlite3.Error, OSError) as exc:
+            logger.exception("Unable to complete SQLite backup; existing data retained: %s", exc)
+            return None
+        finally:
+            if destination is not None:
+                destination.close()
+            if source is not None:
+                source.close()
+            if not complete:
+                try:
+                    partial_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Could not remove interrupted backup %s", partial_path.name)
 
     @contextmanager
     def transaction(self):
