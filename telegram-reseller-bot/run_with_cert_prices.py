@@ -123,20 +123,46 @@ async def show_certificate_offer(update):
         return
     loading = await update.effective_message.reply_text("🔄 Consultando disponibilidad del certificado…")
     try:
-        plans, balance = await asyncio.gather(
-            asyncio.to_thread(bot.chungchi.plans), asyncio.to_thread(bot.chungchi.balance)
+        # Do not leave the customer with a permanent "Consultando..." message.
+        plans, balance = await asyncio.wait_for(
+            asyncio.gather(
+                asyncio.to_thread(bot.chungchi.plans),
+                asyncio.to_thread(bot.chungchi.balance),
+            ),
+            timeout=50,
         )
     except ChungChiError as exc:
-        await loading.edit_text(
-            "⚠️ No pude verificar el servicio de certificados. Inténtalo más tarde.", parse_mode=ParseMode.HTML
+        # Log only the provider's status/code, never the API key or response body.
+        bot.log.warning(
+            "ChungChi availability check failed: HTTP=%s code=%s",
+            exc.status, exc.code,
         )
+        await loading.edit_text("⚠️ No pude verificar el servicio de certificados. Inténtalo más tarde.")
         return
-    plan = next((p for p in plans if int(p.get("id", -1)) == bot.settings.chungchi_plan_id), None)
-    if not plan:
-        await loading.edit_text("⚠️ Este plan de certificado no está disponible en este momento.")
+    except asyncio.TimeoutError:
+        bot.log.warning("ChungChi availability check timed out")
+        await loading.edit_text("⚠️ El proveedor tardó demasiado en responder. Inténtalo más tarde.")
         return
-    provider_balance = float(balance.get("wallet", 0) or 0)
-    provider_cost = float(plan.get("amount", 0) or 0)
+    except Exception:
+        bot.log.exception("Unexpected error checking certificate availability")
+        await loading.edit_text("⚠️ No pude verificar el servicio de certificados. Inténtalo más tarde.")
+        return
+
+    try:
+        plan = next(
+            (p for p in plans if isinstance(p, dict)
+             and str(p.get("id", "")) == str(bot.settings.chungchi_plan_id)),
+            None,
+        )
+        if not plan:
+            await loading.edit_text("⚠️ Este plan de certificado no está disponible en este momento.")
+            return
+        provider_balance = float(balance.get("wallet", 0) or 0)
+        provider_cost = float(plan.get("amount", 0) or 0)
+    except (AttributeError, TypeError, ValueError):
+        bot.log.exception("Malformed ChungChi plans/balance response")
+        await loading.edit_text("⚠️ El proveedor devolvió datos inválidos. Inténtalo más tarde.")
+        return
     if provider_balance < provider_cost:
         await loading.edit_text("⚠️ Certificados agotados temporalmente. Contacta al soporte.")
         return
@@ -268,14 +294,14 @@ async def callback(update, context):
     return await _original_callback(update, context)
 
 
-async def handle_flow(update, context):
+async def handle_flow(update, context, text_override: str | None = None):
     flow = context.user_data.get("flow")
     if flow and flow.get("name") == "certificate_partner_price":
         if bot.panel(context) != "admin" or not bot.is_admin(update.effective_user.id):
             context.user_data.pop("flow", None)
             await update.effective_message.reply_text("⛔ Solo el administrador puede cambiar este precio.")
             return True
-        text = (update.effective_message.text or "").strip()
+        text = text_override if text_override is not None else (update.effective_message.text or "").strip()
         try:
             price = bot.parse_amount(text)
         except ValueError as exc:
@@ -294,7 +320,7 @@ async def handle_flow(update, context):
             reply_markup=bot.ADMIN_MENU,
         )
         return True
-    return await _original_handle_flow(update, context)
+    return await _original_handle_flow(update, context, text_override=text_override)
 
 
 async def handle_text_menu(update, context):
