@@ -55,6 +55,25 @@ class ChungChiClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ChungChiError, "no válido"):
             client.download("https://evil.example/certificate.zip")
 
+    def test_webhook_registration_uses_documented_post(self):
+        captured = {}
+
+        def opener(request, timeout):
+            captured["method"] = request.get_method()
+            captured["path"] = request.full_url
+            captured["payload"] = json.loads(request.data)
+            return FakeResponse({"data": {"secret": "whsec_test"}})
+
+        client = ChungChiClient("https://chungchi.store", "secret", opener=opener)
+        response = client.configure_webhook("https://example.org/chungchi/webhook")
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "https://chungchi.store/api/v1/webhook")
+        self.assertEqual(captured["payload"], {
+            "action": "set", "url": "https://example.org/chungchi/webhook",
+        })
+        self.assertEqual(response["secret"], "whsec_test")
+
+
 
 if __name__ == "__main__":
     unittest.main()
