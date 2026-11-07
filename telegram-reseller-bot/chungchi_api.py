@@ -133,7 +133,8 @@ class ChungChiClient:
         return data if isinstance(data, list) else []
 
     def configure_webhook(self, url: str) -> dict[str, Any]:
-        data = self._data(self._request("PUT", "/api/v1/webhook", {"url": url}))
+        # ChungChi API v1 requires POST with action=set (not PUT).
+        data = self._data(self._request("POST", "/api/v1/webhook", {"action": "set", "url": url}))
         return data if isinstance(data, dict) else {}
 
     def download(self, url: str, max_bytes: int = 20 * 1024 * 1024) -> bytes:
