@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from database import Database, InsufficientBalance, OutOfStock, ProductRestricted
+from database import Database, InsufficientBalance, OutOfStock, ProductRestricted, StoreError
 
 
 class DatabaseTests(unittest.TestCase):
@@ -256,6 +256,47 @@ class DatabaseTests(unittest.TestCase):
         )
         self.db.mark_certificate_error(order["id"], "invalid request", True)
         self.assertEqual(self.db.certificate_key(2, issued["key_code"])["status"], "available")
+        self.assertEqual(self.db.user(2)["balance_cents"], 650)
+
+    def test_rejected_certificate_order_can_retry_with_same_key_without_extra_charge(self):
+        self.credit(1000)
+        issued = self.db.buy_certificate_key(2, "CERT-RETRY-SAFE", 350)
+        expiry = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+        first = self.db.create_certificate_order(
+            2, issued["key_code"], 23, "00008110-001C0CAE2101801E",
+            "iphone", "old-password", "Old Name", "first-token", expiry,
+        )
+        self.db.mark_certificate_error(first["id"], "HTTP 401: unauthorized", True)
+        self.assertEqual(self.db.certificate_key(2, issued["key_code"])["status"], "available")
+
+        retried = self.db.create_certificate_order(
+            2, issued["key_code"], 23, "00008110-001C0CAE2101801F",
+            "iphone", "new-password", "New Name", "second-token", expiry,
+        )
+        self.assertEqual(retried["id"], first["id"])
+        self.assertEqual(retried["status"], "submitting")
+        self.assertEqual(retried["display_name"], "New Name")
+        self.assertEqual(retried["install_token"], "second-token")
+        self.assertEqual(retried["last_error"], "")
+        self.assertEqual(self.db.certificate_key(2, issued["key_code"])["status"], "processing")
+        self.assertEqual(self.db.user(2)["balance_cents"], 650)
+
+    def test_ambiguous_certificate_order_cannot_be_overwritten(self):
+        self.credit(1000)
+        issued = self.db.buy_certificate_key(2, "CERT-REVIEW-SAFE", 350)
+        expiry = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+        first = self.db.create_certificate_order(
+            2, issued["key_code"], 23, "00008110-001C0CAE2101801E",
+            "iphone", "password", "Name", "review-token", expiry,
+        )
+        self.db.mark_certificate_error(first["id"], "provider timeout", False)
+        self.assertEqual(self.db.certificate_key(2, issued["key_code"])["status"], "processing")
+        with self.assertRaises(StoreError):
+            self.db.create_certificate_order(
+                2, issued["key_code"], 23, "00008110-001C0CAE2101801F",
+                "iphone", "password", "Other", "other-token", expiry,
+            )
+        self.assertEqual(self.db.certificate_order(first["id"])["install_token"], "review-token")
         self.assertEqual(self.db.user(2)["balance_cents"], 650)
 
     def test_completed_certificate_waits_for_download_and_extends_private_link(self):
