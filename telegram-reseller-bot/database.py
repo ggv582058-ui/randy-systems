@@ -1222,6 +1222,30 @@ class Database:
             )
             if claimed.rowcount != 1:
                 raise StoreError("Esta key ya fue utilizada")
+            # A rejected 4xx provider attempt releases the same purchased key.
+            # Reuse its failed local row instead of violating certificate_key_id UNIQUE.
+            # Never retry/overwrite an ambiguous or already linked provider order.
+            existing = con.execute(
+                "SELECT * FROM certificate_orders WHERE certificate_key_id=?",
+                (key["id"],),
+            ).fetchone()
+            if existing:
+                if existing["status"] != "failed" or existing["provider_order_code"]:
+                    raise StoreError(
+                        "Esta key ya tiene un pedido registrado. Revisa 💠 Tu certificado "
+                        "antes de intentar otra compra."
+                    )
+                con.execute(
+                    """UPDATE certificate_orders SET plan_id=?,udid=?,device=?,p12_password=?,
+                       display_name=?,status='submitting',provider_amount_cents=NULL,
+                       download_url=NULL,install_token=?,install_expires_at=?,last_error='',
+                       completed_at=NULL,delivered_at=NULL,updated_at=? WHERE id=?""",
+                    (plan_id, udid, device, p12_password, display_name,
+                     install_token, install_expires_at, now, existing["id"]),
+                )
+                return con.execute(
+                    "SELECT * FROM certificate_orders WHERE id=?", (existing["id"],)
+                ).fetchone()
             cur = con.execute(
                 """INSERT INTO certificate_orders(
                    certificate_key_id,user_id,plan_id,udid,device,p12_password,display_name,
