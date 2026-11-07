@@ -132,12 +132,26 @@ async def show_certificate_offer(update):
             timeout=50,
         )
     except ChungChiError as exc:
-        # Log only the provider's status/code, never the API key or response body.
+        # Log only the provider's status/code, never API credentials.
         bot.log.warning(
             "ChungChi availability check failed: HTTP=%s code=%s",
             exc.status, exc.code,
         )
-        await loading.edit_text("⚠️ No pude verificar el servicio de certificados. Inténtalo más tarde.")
+        if exc.status in (401, 403) or exc.code == "UNAUTHORIZED":
+            if bot.is_admin(update.effective_user.id):
+                notice = (
+                    "🔐 ChungChi rechazó la API Key (HTTP 401/403). "
+                    "Revisa CHUNGCHI_API_KEY en Render y crea una nueva desde tu cuenta "
+                    "ChungChi si fue revocada. No compartas la clave por Telegram."
+                )
+            else:
+                notice = (
+                    "⚠️ Certificados temporalmente no disponibles. "
+                    "El proveedor rechazó la autorización; contacta al administrador."
+                )
+            await loading.edit_text(notice)
+        else:
+            await loading.edit_text("⚠️ No pude verificar el servicio de certificados. Inténtalo más tarde.")
         return
     except asyncio.TimeoutError:
         bot.log.warning("ChungChi availability check timed out")
