@@ -294,6 +294,20 @@ jobs:
           print("Randy Mod: SwiftUI views, Spanish resources and RS icon updated")
           PY
 
+      - name: Descargar interfaz RS original
+        uses: actions/checkout@v4
+        with:
+          ref: randy-mod-ios-build
+          path: randy_ui
+          sparse-checkout: |
+            ios-ui
+
+      - name: Integrar RS Control Center
+        run: |
+          test -f randy_ui/ios-ui/FeatureHubView.swift
+          cp randy_ui/ios-ui/FeatureHubView.swift upstream/ThreeOneOSSix/views/FeatureHubView.swift
+          grep -q 'CONTROL 01' upstream/ThreeOneOSSix/views/FeatureHubView.swift
+
       - name: Compilar aplicación iOS
         shell: bash
         run: |
@@ -311,12 +325,12 @@ jobs:
           test -f "$APP/3106"
           mkdir -p Payload
           cp -R "$APP" Payload/
-          zip -qry Randy_Mod_iOS_REDISENO_unsigned.ipa Payload
-          shasum -a 256 Randy_Mod_iOS_REDISENO_unsigned.ipa
+          zip -qry Randy_Mod_iOS_RS_CONTROL_unsigned.ipa Payload
+          shasum -a 256 Randy_Mod_iOS_RS_CONTROL_unsigned.ipa
 
       - name: Subir IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Randy_Mod_iOS_REDISENO_unsigned
-          path: Randy_Mod_iOS_REDISENO_unsigned.ipa
+          name: Randy_Mod_iOS_RS_CONTROL_unsigned
+          path: Randy_Mod_iOS_RS_CONTROL_unsigned.ipa
           retention-days: 14
