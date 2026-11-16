@@ -1,0 +1,322 @@
+name: Compilar Randy Mod iOS (IPA sin firmar)
+on:
+  push:
+    branches: [randy-mod-ios-build]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Descargar fuente original GPL-3.0
+        uses: actions/checkout@v4
+        with:
+          repository: QuinnTang74/3106
+          ref: main
+          path: upstream
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar generador de iconos
+        run: python3 -m pip install pillow
+
+      - name: Aplicar rediseño Randy Mod
+        working-directory: upstream
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, re, shutil
+          from PIL import Image, ImageDraw, ImageFont
+          
+          root=Path.cwd()
+          app=root/"ThreeOneOSSix"
+          def edit(path,old,new,expected=1):
+              p=root/path
+              s=p.read_text()
+              n=s.count(old)
+              if n!=expected: raise RuntimeError(f"{path}: expected {expected} match(es), found {n}")
+              p.write_text(s.replace(old,new,expected))
+          
+          edit("ThreeOneOSSix/views/DesignSystem.swift",
+          '''    static let accent = Color(
+                  uiColor: UIColor { traits in
+                      traits.userInterfaceStyle == .dark
+                          ? UIColor(red: 1.00, green: 0.64, blue: 0.42, alpha: 1.00)
+                          : UIColor(red: 0.85, green: 0.42, blue: 0.20, alpha: 1.00)
+                  }
+              )
+              static let pageBackground = Color(uiColor: .systemBackground)
+              static let consoleBackground = Color(uiColor: .secondarySystemBackground)''',
+          '''    static let accent = Color(red: 0.10, green: 0.72, blue: 1.00)
+              static let accentGold = Color(red: 1.0, green: 0.79, blue: 0.22)
+              static let pageBackground = Color(red: 0.018, green: 0.045, blue: 0.105)
+              static let consoleBackground = Color(red: 0.055, green: 0.115, blue: 0.23)''')
+          edit("ThreeOneOSSix/views/DesignSystem.swift",
+          '                .fill(tint.opacity(0.12))',
+          '''                .fill(LinearGradient(colors: [tint.opacity(0.35), tint.opacity(0.07)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                          .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(tint.opacity(0.38), lineWidth: 0.8))''')
+          edit("ThreeOneOSSix/ContentView.swift",
+          '''        .tint(AppTheme.accent)
+                  .imageScale(.small)''',
+          '''        .tint(AppTheme.accent)
+                  .preferredColorScheme(.dark)
+                  .imageScale(.small)''')
+          edit("ThreeOneOSSix/ContentView.swift",'.navigationTitle("3106")','.navigationTitle("Randy Mod iOS")')
+          
+          edit("ThreeOneOSSix/views/FeatureHubView.swift",
+          '''            List {
+                          Section {
+                              LabeledContent(language.text("home.version"), value: appVersion)''',
+          '''            List {
+                          Section {
+                              randyBrandHeader
+                          }.listRowBackground(Color.clear)
+                          Section {
+                              LabeledContent(language.text("home.version"), value: appVersion)''')
+          edit("ThreeOneOSSix/views/FeatureHubView.swift",
+          '''            .listStyle(.insetGrouped)
+                      .navigationTitle(language.text("tab.features"))''',
+          '''            .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .background(AppTheme.pageBackground)
+                      .navigationTitle("Randy Mod iOS")''')
+          old='''    private func card(
+                  _ titleKey: String,
+                  detail: String,
+                  icon: String
+              ) -> some View {
+                  HStack(spacing: 12) {
+                      AppRowIcon(systemName: icon)
+                      VStack(alignment: .leading, spacing: 2) {
+                          Text(language.text(titleKey))
+                              .foregroundStyle(.primary)
+                          Text(language.text(detail))
+                              .font(.caption)
+                              .foregroundStyle(.secondary)
+                      }
+                  }
+                  .padding(.vertical, 2)
+              }'''
+          new='''    private var randyBrandHeader: some View {
+                  HStack(spacing: 15) {
+                      AppLogo(size: 70)
+                          .shadow(color: AppTheme.accent.opacity(0.65), radius: 15)
+                      VStack(alignment: .leading, spacing: 5) {
+                          Text("RANDY MOD")
+                              .font(.system(size: 27, weight: .black, design: .rounded))
+                              .tracking(1.6)
+                              .foregroundStyle(.white)
+                          Text("RS  /  PATCH STUDIO")
+                              .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                              .foregroundStyle(AppTheme.accent)
+                          Text("APP DATA  •  PATCHES  •  TOOLS")
+                              .font(.system(size: 9, design: .monospaced))
+                              .foregroundStyle(.white.opacity(0.65))
+                      }
+                      Spacer(minLength: 0)
+                  }
+                  .padding(19)
+                  .background(LinearGradient(colors: [Color(red: 0.07, green: 0.24, blue: 0.45), AppTheme.pageBackground], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 20))
+                  .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(AppTheme.accent.opacity(0.45), lineWidth: 1))
+                  .frame(maxWidth: .infinity)
+              }
+          
+              private func card(
+                  _ titleKey: String,
+                  detail: String,
+                  icon: String
+              ) -> some View {
+                  HStack(spacing: 13) {
+                      AppRowIcon(systemName: icon, symbolSize: 19, frameSize: 38)
+                      VStack(alignment: .leading, spacing: 3) {
+                          Text(language.text(titleKey))
+                              .font(.subheadline.weight(.semibold))
+                              .foregroundStyle(.white)
+                          Text(language.text(detail))
+                              .font(.caption)
+                              .foregroundStyle(.white.opacity(0.65))
+                      }
+                      Spacer(minLength: 0)
+                      Image(systemName: "chevron.right")
+                          .font(.caption2.weight(.semibold))
+                          .foregroundStyle(AppTheme.accent.opacity(0.70))
+                  }
+                  .padding(.horizontal, 12)
+                  .padding(.vertical, 12)
+                  .background(LinearGradient(colors: [AppTheme.consoleBackground, AppTheme.pageBackground], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 14))
+                  .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(AppTheme.accent.opacity(0.26), lineWidth: 0.8))
+              }'''
+          edit("ThreeOneOSSix/views/FeatureHubView.swift",old,new)
+          edit("ThreeOneOSSix/App.swift",
+          '    @State private var showOnboarding = OnboardingStore.shouldShow()',
+          '    @State private var showOnboarding = OnboardingStore.shouldShow()\n    @State private var showBrandSplash = true')
+          edit("ThreeOneOSSix/App.swift",
+          '''                    .zIndex(1)
+                          }
+                      }
+                      .displayIdentityAttribution''',
+          '''                    .zIndex(1)
+                          }
+                          if showBrandSplash {
+                              RandyLaunchSplash()
+                                  .transition(.opacity)
+                                  .zIndex(3)
+                          }
+                      }
+                      .task {
+                          try? await Task.sleep(nanoseconds: 3_200_000_000)
+                          withAnimation(.easeOut(duration: 0.35)) {
+                              showBrandSplash = false
+                          }
+                      }
+                      .preferredColorScheme(.dark)
+                      .displayIdentityAttribution''')
+          edit("ThreeOneOSSix/App.swift","class AppState: ObservableObject {",
+          '''private struct RandyLaunchSplash: View {
+              var body: some View {
+                  ZStack {
+                      AppTheme.pageBackground.ignoresSafeArea()
+                      RadialGradient(colors: [AppTheme.accent.opacity(0.24), .clear], center: .center, startRadius: 30, endRadius: 340).ignoresSafeArea()
+                      VStack(spacing: 15) {
+                          AppLogo(size: 112)
+                              .shadow(color: AppTheme.accent.opacity(0.65), radius: 24)
+                          Text("RANDY MOD")
+                              .font(.system(size: 34, weight: .black, design: .rounded))
+                              .tracking(2.5).foregroundStyle(.white)
+                          Text("RS  /  PATCH STUDIO")
+                              .font(.system(size: 11, weight: .medium, design: .monospaced))
+                              .tracking(1.6).foregroundStyle(AppTheme.accent)
+                          Capsule().fill(AppTheme.accentGold).frame(width: 55, height: 3)
+                      }
+                  }
+              }
+          }
+          
+          class AppState: ObservableObject {''')
+          edit("ThreeOneOSSix/App.swift",
+          '@AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue',
+          '@AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.spanish.rawValue')
+          edit("ThreeOneOSSix/views/OnboardingView.swift",
+          '@AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue',
+          '@AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.spanish.rawValue')
+          edit("ThreeOneOSSix/views/OnboardingView.swift",
+          '            AppLogo(size: 72)',
+          '            AppLogo(size: 104)\n                .shadow(color: AppTheme.accent.opacity(0.5), radius: 18)')
+          edit("ThreeOneOSSix/helpers/Localization.swift",
+          '    static let storageKey = "appLanguage"',
+          '    static let storageKey = "randyAppLanguage"')
+          edit("ThreeOneOSSix/helpers/Localization.swift",
+          '    case english = "en"\n    case vietnamese = "vi"',
+          '    case english = "en"\n    case spanish = "es"\n    case vietnamese = "vi"')
+          edit("ThreeOneOSSix/helpers/Localization.swift",
+          '        case .english: return "English"\n        case .vietnamese: return "Tiếng Việt"',
+          '        case .english: return "English"\n        case .spanish: return "Español"\n        case .vietnamese: return "Tiếng Việt"')
+          proj="ThreeOneOSSix.xcodeproj/project.pbxproj"
+          edit(proj,
+          '3105A121 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };',
+          '3105A121 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };\n\t\t3105C123 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/Localizable.strings; sourceTree = "<group>"; };')
+          edit(proj,'\t\t\t\t3105A121 /* en */,\n','\t\t\t\t3105A121 /* en */,\n\t\t\t\t3105C123 /* es */,\n')
+          edit(proj,'\t\t\t\ten,\n\t\t\t\tvi,\n\t\t\t\t"zh-Hans",',
+                    '\t\t\t\ten,\n\t\t\t\tes,\n\t\t\t\tvi,\n\t\t\t\t"zh-Hans",')
+          p=root/proj
+          s=p.read_text()
+          assert s.count("INFOPLIST_KEY_CFBundleDisplayName = 3106;")==2
+          p.write_text(s.replace("INFOPLIST_KEY_CFBundleDisplayName = 3106;",'INFOPLIST_KEY_CFBundleDisplayName = "Randy Mod";'))
+          
+          translations={
+          "common.close":"Cerrar","common.done":"Listo","common.ok":"Aceptar","common.cancel":"Cancelar",
+          "common.delete":"Eliminar","common.clear":"Borrar búsqueda","common.failed":"Falló",
+          "common.device":"Dispositivo","common.next":"Siguiente","common.back":"Volver",
+          "common.finish":"Finalizar","common.reboot":"Reiniciar",
+          "home.status":"Estado del sistema","home.version":"Versión","home.backend":"Acceso",
+          "home.section.device":"Herramientas del dispositivo","home.section.apps":"Parches y aplicaciones",
+          "home.section.data":"Archivos y datos","home.section.about":"Información y ajustes",
+          "home.card.patches":"Patch Studio","home.card.files":"App Data",
+          "home.card.settings":"Configuración","home.card.logs":"Registro de actividad",
+          "onboarding.language_title":"Elige tu idioma",
+          "onboarding.language_subtitle":"Puedes cambiarlo después en Ajustes.",
+          "onboarding.welcome_title":"Bienvenido a Randy Mod",
+          "onboarding.welcome_message":"Herramientas, parches y administración de archivos.",
+          "onboarding.versions_title":"Versiones compatibles de iOS",
+          "onboarding.versions_subtitle":"La disponibilidad depende de tu versión de iOS.",
+          "onboarding.install_title":"Requisitos de certificado",
+          "update.title":"Actualización disponible",
+          "update.dismiss":"No volver a mostrar",
+          "app.subtitle":"Editor de MobileGestalt",
+          "app.capability_editor":"Editor de capacidades",
+          "attribution.title":"Acerca del proyecto original 3106",
+          "attribution.subtitle":"Créditos y licencia",
+          "attribution.link_section":"Enlace original",
+          "attribution.open":"Abrir enlace",
+          "attribution.share":"Compartir enlace",
+          "patch.error.wrong_password":"Contraseña incorrecta",
+          }
+          src=(app/"en.lproj/Localizable.strings").read_text()
+          pat=re.compile(r'^\s*"((?:\\.|[^"\\])*)"\s*=\s*"((?:\\.|[^"\\])*)"\s*;',re.M)
+          def escape(s): return s.replace("\\","\\\\").replace('"','\\"').replace("\n",r"\n")
+          records=pat.findall(src)
+          lines=["/* Randy Mod iOS. Proyecto 3106 original GPL-3.0. */"]
+          for k,v in records:
+              target=translations.get(k)
+              if not target:
+                  target=v
+              if sorted(re.findall(r'%(?:\d+\$)?[@diuXxfgs]',v))!=sorted(re.findall(r'%(?:\d+\$)?[@diuXxfgs]',target)):
+                  target=v
+              lines.append(f'"{k}" = "{escape(target)}";')
+          dst=app/"es.lproj/Localizable.strings"
+          dst.parent.mkdir(exist_ok=True)
+          dst.write_text("\n".join(lines)+"\n")
+          
+          N=1024
+          im=Image.new("RGB",(N,N),(3,14,32)); d=ImageDraw.Draw(im)
+          for y in range(N):
+              col=(int(3+7*y/N),int(15+17*y/N),int(34+35*y/N))
+              d.line((0,y,N,y),fill=col)
+          d.rounded_rectangle((68,68,956,956),radius=194,fill=(8,32,65),outline=(40,196,255),width=16)
+          d.rounded_rectangle((122,122,902,902),radius=144,outline=(26,100,177),width=7)
+          try:
+              font=ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Bold.ttf",420)
+          except OSError:
+              font=ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf",420)
+          text="RS"
+          bbox=d.textbbox((0,0),text,font=font,stroke_width=1)
+          tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
+          d.text(((N-tw)/2-bbox[0],(N-th)/2-bbox[1]-45),text,fill=(232,247,255),font=font,stroke_width=2,stroke_fill=(15,170,246))
+          d.rounded_rectangle((344,760,680,779),radius=9,fill=(255,200,63))
+          im.save(app/"Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png")
+          print("Randy Mod: SwiftUI views, Spanish resources and RS icon updated")
+          PY
+
+      - name: Compilar aplicación iOS
+        shell: bash
+        run: |
+          cd upstream
+          xcodebuild -project ThreeOneOSSix.xcodeproj -scheme 3106 \
+            -configuration Release -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Empaquetar IPA modificada
+        shell: bash
+        run: |
+          APP="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/3106.app"
+          test -f "$APP/3106"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry Randy_Mod_iOS_REDISENO_unsigned.ipa Payload
+          shasum -a 256 Randy_Mod_iOS_REDISENO_unsigned.ipa
+
+      - name: Subir IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Randy_Mod_iOS_REDISENO_unsigned
+          path: Randy_Mod_iOS_REDISENO_unsigned.ipa
+          retention-days: 14
