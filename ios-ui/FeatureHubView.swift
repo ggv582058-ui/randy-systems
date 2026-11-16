@@ -105,7 +105,7 @@ struct FeatureHubView: View {
                 Label("Panel de herramientas", systemImage: "square.stack.3d.up.fill")
                 Spacer()
                 Text("v" + AppInfo.appVersion)
-                    .fontDesign(.monospaced)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
             }
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(muted)
