@@ -1,7 +1,9 @@
-import { downloadContentFromMessage, getContentType } from '@whiskeysockets/baileys'
+import { downloadContentFromMessage, downloadMediaMessage, getContentType } from '@whiskeysockets/baileys'
+import pino from 'pino'
 import { config } from '../config.js'
 import { jidToNumber, quotedMessage, quotedParticipant } from './utils.js'
 import { findGroupParticipant, matchGroupParticipant } from './group-identity.js'
+import { buildQuotedMediaEnvelope } from './quoted-media.js'
 
 const GROUP_METADATA_COMMANDS = new Set([
   'menu',
@@ -67,10 +69,32 @@ export async function buildContext(sock, msg, parsed) {
     const content = container?.[type]
     if (!type || !content) throw new Error('No se encontró multimedia.')
     const mediaType = type.replace('Message', '')
-    const stream = await downloadContentFromMessage(content, mediaType)
-    const chunks = []
-    for await (const chunk of stream) chunks.push(chunk)
-    return { buffer: Buffer.concat(chunks), type, content }
+    try {
+      const stream = await downloadContentFromMessage(content, mediaType)
+      const chunks = []
+      let total = 0
+      for await (const chunk of stream) {
+        total += chunk.length
+        if (total > 16 * 1024 * 1024) throw new Error('media too large')
+        chunks.push(chunk)
+      }
+      if (!total) throw new Error('empty media')
+      return { buffer: Buffer.concat(chunks), type, content }
+    } catch (error) {
+      // Re-upload is supported for ordinary quoted media when the original key
+      // is available. No view-once bypass or persistent media archive.
+      if (!q || !['stickerMessage', 'imageMessage', 'videoMessage'].includes(type) || typeof sock.updateMediaMessage !== 'function') throw error
+      const original = buildQuotedMediaEnvelope(msg, [sock.user?.id, sock.user?.lid])
+      if (!original) throw error
+      const buffer = await downloadMediaMessage(
+        original,
+        'buffer',
+        {},
+        { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage.bind(sock) }
+      )
+      if (!buffer?.length || buffer.length > 16 * 1024 * 1024) throw new Error('media unavailable or too large')
+      return { buffer, type, content }
+    }
   }
 
   return { sock, msg, jid, sender, senderNumber, isGroup, groupMetadata, participants, isAdmin, isBotAdmin, isOwner, reply, react, getTargetJid, downloadQuotedOrCurrent, ...parsed }
