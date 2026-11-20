@@ -185,12 +185,17 @@ async function swm(ctx) {
 }
 
 async function ske(ctx) {
+  const customName = ctx.args.join(' ').trim()
+  if (!customName) return ctx.reply('❌ Escribe el nombre. Ejemplo: *.ske Randy*')
   try {
     const webp = await mediaAsWebp(ctx)
-    const customName = ctx.args.join(' ').trim()
-    if (!customName) return ctx.reply('❌ Escribe el nombre. Ejemplo: *.ske Randy*')
-    return ctx.sock.sendMessage(ctx.jid, { sticker: addStickerMetadata(webp, customName.slice(0, 100), '', { fresh: true }) }, { quoted: ctx.msg })
-  } catch (error) { console.error('SKE sticker error:', error); return ctx.reply('❌ No pude crear ese sticker. Responde a una imagen o sticker con *.ske Nombre*.') }
+    const sticker = addStickerMetadata(webp, customName.slice(0, 100), '', { fresh: true })
+    return await ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
+  } catch (error) {
+    const status = error?.output?.statusCode || error?.status || error?.code || 'unknown'
+    console.error('SKE failed:', { status, reason: String(error?.message || error).slice(0, 160) })
+    return ctx.reply('❌ No se pudo crear el sticker. Si es uno viejo de Favoritos, WhatsApp podría no entregar el archivo original. Prueba reenviándolo como imagen normal, o usa una foto con .s antes de cambiarle el nombre con .ske.')
+  }
 }
 
 async function letr(ctx) {
