@@ -6,7 +6,7 @@ import { findGroupParticipant, matchGroupParticipant } from './group-identity.js
 const GROUP_METADATA_COMMANDS = new Set([
   'menu',
   'admins', 'tagall', 'hidetag', 'kick', 'add', 'promote', 'demote',
-  'link', 'revoke', 'subject', 'desc', 'open', 'close', 'groupinfo'
+  'link', 'revoke', 'subject', 'desc', 'open', 'close', 'groupinfo', 'ver'
 ])
 
 // Role-changing commands must fetch fresh permissions, not a cached admin list.
@@ -42,7 +42,7 @@ export async function buildContext(sock, msg, parsed) {
   // WhatsApp group-metadata network request. Skipping it makes them react
   // immediately instead of waiting on an extra round trip to WhatsApp.
   if (isGroup && GROUP_METADATA_COMMANDS.has(parsed.command)) {
-    groupMetadata = await getGroupMetadata(sock, jid, GROUP_ADMIN_ACTIONS.has(parsed.command))
+    groupMetadata = await getGroupMetadata(sock, jid, (GROUP_ADMIN_ACTIONS.has(parsed.command) || parsed.command === 'ver'))
     participants = groupMetadata?.participants || []
     const senderP = await findGroupParticipant(sock, participants, [sender, msg.key.participantAlt])
     const botP = await findGroupParticipant(sock, participants, [sock.user?.id, sock.user?.lid])
