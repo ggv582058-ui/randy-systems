@@ -1,6 +1,6 @@
 // Preserve the original WhatsApp message key when asking for an expired
 // *ordinary* quoted attachment to be re-uploaded.
-export function buildQuotedMediaEnvelope(msg, botJid) {
+export function buildQuotedMediaEnvelope(msg, botJids = []) {
   const contexts = [
     msg?.message?.extendedTextMessage?.contextInfo,
     msg?.message?.imageMessage?.contextInfo,
@@ -11,7 +11,7 @@ export function buildQuotedMediaEnvelope(msg, botJid) {
   const remoteJid = msg?.key?.remoteJid
   if (!remoteJid) return null
   const participant = ctx.participant || undefined
-  const ownIds = [botJid, msg?.key?.participantAlt].filter(Boolean)
+  const ownIds = (Array.isArray(botJids) ? botJids : [botJids]).filter(Boolean)
   const fromMe = ownIds.some(id => participant && id === participant)
   return {
     key: {
