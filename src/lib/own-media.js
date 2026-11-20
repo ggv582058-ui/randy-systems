@@ -13,8 +13,9 @@ export async function isAuthorOfQuotedMessage(sock, participants, msg, sender) {
   return Boolean(requester && author && requester.id === author.id)
 }
 
-export function getQuotedImage(msg) {
+export function getQuotedImageInfo(msg) {
   let contents = quotedMessage(msg)
+  let isViewOnce = false
   const wrappers = [
     'ephemeralMessage',
     'viewOnceMessage',
@@ -23,10 +24,17 @@ export function getQuotedImage(msg) {
     'documentWithCaptionMessage'
   ]
   for (let n = 0; n < 6 && contents; n++) {
-    if (contents.imageMessage) return contents.imageMessage
+    if (contents.imageMessage) {
+      return { image: contents.imageMessage, isViewOnce: isViewOnce || Boolean(contents.imageMessage.viewOnce) }
+    }
     const wrapper = wrappers.find(key => contents[key]?.message)
-    if (!wrapper) return null
+    if (!wrapper) return { image: null, isViewOnce }
+    if (wrapper.startsWith('viewOnceMessage')) isViewOnce = true
     contents = contents[wrapper].message
   }
-  return null
+  return { image: null, isViewOnce }
+}
+
+export function getQuotedImage(msg) {
+  return getQuotedImageInfo(msg).image
 }
