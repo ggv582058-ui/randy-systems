@@ -6,7 +6,7 @@ const categories = {
   descargas: ['play', 'ytplay', 'youtube.play', 'spotify', 'sp', 'ytmp3', 'yta', 'ytmp4', 'ytvideo', 'playvideo', 'youtube.video', 'tiktok', 'tt', 'tiktoknowm', 'ttnowm', 'instagram', 'ig', 'mediahelp', 'descargas'],
   grupos: ['admins', 'tagall', 'hidetag', 'kick', 'add', 'promote', 'demote', 'link', 'revoke', 'subject', 'desc', 'open', 'close', 'groupinfo'],
   ia: ['ia', 'resumir', 'traducir'],
-  herramientas: ['hora', 'fecha', 'calc', 'qr', 'id', 'jid', 'runtime', 'avatar'],
+  herramientas: ['hora', 'fecha', 'calc', 'qr', 'id', 'jid', 'runtime', 'avatar', 'ver'],
   social: ['perfil', 'me', 'owner', 'grupo', 'saludar'],
   diversion: ['dado', 'moneda', '8ball', 'ship', 'rate', 'chiste', 'reto', 'verdad'],
   general: ['menu', 'ping', 'botinfo', 'ayuda', 'prefix', 'estado', 'uptime', 'comandos', 'setppbot']
