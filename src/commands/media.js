@@ -1,5 +1,6 @@
 import { downloadContentFromMessage } from '@whiskeysockets/baileys'
 import { getQuotedImageInfo, isAuthorOfQuotedMessage } from '../lib/own-media.js'
+import { quotedMessage } from '../lib/utils.js'
 
 const MAX_PHOTO_BYTES = 16 * 1024 * 1024
 
@@ -11,6 +12,11 @@ async function resendOwnPhoto(ctx) {
 
   const { image, isViewOnce } = getQuotedImageInfo(ctx.msg)
   if (!image) {
+    const quoted = quotedMessage(ctx.msg)
+    const quotedText = quoted?.conversation || quoted?.extendedTextMessage?.text || ''
+    if (String(quotedText).trim().toLowerCase().startsWith('.ver')) {
+      return ctx.reply('📸 Estás respondiendo a otro mensaje .ver, no a la foto. Mantén presionada la foto original, elige Responder y escribe .ver.')
+    }
     return ctx.reply('❌ La foto ya no está adjunta al mensaje citado. Si era de una sola vista, WhatsApp puede retirar los datos y el bot no puede recuperarlos.')
   }
 
