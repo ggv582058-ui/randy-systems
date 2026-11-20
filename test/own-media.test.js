@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { getQuotedImage, isAuthorOfQuotedMessage } from '../src/lib/own-media.js'
+import { getQuotedImage, getQuotedImageInfo, isAuthorOfQuotedMessage } from '../src/lib/own-media.js'
 
 const me = '12345@lid'
 const other = '67890@lid'
@@ -42,4 +42,19 @@ test('nested view-once photo can be extracted only if still present', () => {
 
 test('a withdrawn view-once placeholder is not recoverable from quote', () => {
   assert.equal(getQuotedImage(reply(me, { conversation: 'Photo' })), null)
+})
+
+test('reports view-once wrapper separately from an ordinary image', () => {
+  const ordinary = getQuotedImageInfo(reply(me))
+  assert.equal(ordinary.isViewOnce, false)
+  assert.equal(ordinary.image?.mimetype, 'image/jpeg')
+  const wrapped = getQuotedImageInfo(reply(me, { viewOnceMessageV2: { message: { imageMessage: { mimetype: 'image/jpeg' } } } }))
+  assert.equal(wrapped.isViewOnce, true)
+  assert.equal(wrapped.image?.mimetype, 'image/jpeg')
+})
+
+test('handles a view-once image without downloadable metadata', () => {
+  const img = getQuotedImageInfo(reply(me, { imageMessage: { viewOnce: true } }))
+  assert.equal(img.isViewOnce, true)
+  assert.equal(Boolean(img.image?.mediaKey && (img.image.url || img.image.directPath)), false)
 })
