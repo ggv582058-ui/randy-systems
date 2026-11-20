@@ -24,5 +24,6 @@ export const config = {
   sessionBackupIntervalMs: Math.max(5000, number(process.env.SESSION_BACKUP_INTERVAL_MS, 15000)),
   sessionEncryptionKey: process.env.SESSION_ENCRYPTION_KEY || '',
   setupToken: process.env.SETUP_TOKEN || '',
-  pairingCooldownMs: Math.max(5000, number(process.env.PAIRING_COOLDOWN_MS, 15000))
+  pairingCooldownMs: Math.max(5000, number(process.env.PAIRING_COOLDOWN_MS, 15000)),
+  maxLinkedAccounts: Math.max(1, Math.min(20, number(process.env.MAX_LINKED_ACCOUNTS, 6)))
 }
