@@ -1,6 +1,7 @@
 import { downloadContentFromMessage, getContentType } from '@whiskeysockets/baileys'
 import { config } from '../config.js'
 import { jidToNumber, quotedMessage, quotedParticipant } from './utils.js'
+import { findGroupParticipant, matchGroupParticipant } from './group-identity.js'
 
 const GROUP_METADATA_COMMANDS = new Set([
   'menu',
@@ -8,13 +9,19 @@ const GROUP_METADATA_COMMANDS = new Set([
   'link', 'revoke', 'subject', 'desc', 'open', 'close', 'groupinfo'
 ])
 
+// Role-changing commands must fetch fresh permissions, not a cached admin list.
+const GROUP_ADMIN_ACTIONS = new Set([
+  'kick', 'add', 'promote', 'demote', 'link', 'revoke',
+  'subject', 'desc', 'open', 'close'
+])
+
 const GROUP_METADATA_TTL_MS = 30_000
 const groupMetadataCache = new Map()
 
-async function getGroupMetadata(sock, jid) {
+async function getGroupMetadata(sock, jid, forceRefresh = false) {
   const cached = groupMetadataCache.get(jid)
   const now = Date.now()
-  if (cached && now - cached.at < GROUP_METADATA_TTL_MS) return cached.value
+  if (!forceRefresh && cached && now - cached.at < GROUP_METADATA_TTL_MS) return cached.value
 
   const value = await sock.groupMetadata(jid).catch(() => null)
   if (value) groupMetadataCache.set(jid, { at: now, value })
@@ -35,11 +42,10 @@ export async function buildContext(sock, msg, parsed) {
   // WhatsApp group-metadata network request. Skipping it makes them react
   // immediately instead of waiting on an extra round trip to WhatsApp.
   if (isGroup && GROUP_METADATA_COMMANDS.has(parsed.command)) {
-    groupMetadata = await getGroupMetadata(sock, jid)
+    groupMetadata = await getGroupMetadata(sock, jid, GROUP_ADMIN_ACTIONS.has(parsed.command))
     participants = groupMetadata?.participants || []
-    const me = sock.user?.id
-    const senderP = participants.find(p => p.id === sender || jidToNumber(p.id) === jidToNumber(sender))
-    const botP = participants.find(p => p.id === me || jidToNumber(p.id) === jidToNumber(me))
+    const senderP = await findGroupParticipant(sock, participants, [sender, msg.key.participantAlt])
+    const botP = await findGroupParticipant(sock, participants, [sock.user?.id, sock.user?.lid])
     isAdmin = Boolean(senderP?.admin)
     isBotAdmin = Boolean(botP?.admin)
   }
@@ -50,7 +56,8 @@ export async function buildContext(sock, msg, parsed) {
 
   const getTargetJid = () => {
     const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0]
-    return mentioned || quotedParticipant(msg) || (parsed.args?.[0]?.replace(/\D/g, '') ? `${parsed.args[0].replace(/\D/g, '')}@s.whatsapp.net` : null)
+    const target = mentioned || quotedParticipant(msg) || (parsed.args?.[0]?.replace(/\D/g, '') ? `${parsed.args[0].replace(/\D/g, '')}@s.whatsapp.net` : null)
+    return matchGroupParticipant(participants, [target])?.id || target
   }
 
   const downloadQuotedOrCurrent = async () => {
