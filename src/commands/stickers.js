@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { createHash, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
+import { makeStickerPackId } from '../lib/sticker-identity.js'
 import { spawn } from 'node:child_process'
 import ffmpegPath from 'ffmpeg-static'
 import sharp from 'sharp'
@@ -140,14 +141,14 @@ function writeUInt24LE(buffer, value, offset) {
   buffer[offset + 2] = (value >>> 16) & 0xff
 }
 
-function buildStickerExif(pack, author) {
-  const metadata = Buffer.from(JSON.stringify({ 'sticker-pack-id': `randy-${createHash('sha256').update(JSON.stringify([pack, author])).digest('hex').slice(0, 32)}`, 'sticker-pack-name': pack, 'sticker-pack-publisher': author, emojis: ['⚡'] }), 'utf8')
+function buildStickerExif(pack, author, fresh = false) {
+  const metadata = Buffer.from(JSON.stringify({ 'sticker-pack-id': makeStickerPackId(pack, author, { fresh }), 'sticker-pack-name': pack, 'sticker-pack-publisher': author, emojis: ['⚡'] }), 'utf8')
   const exif = Buffer.concat([Buffer.from([0x49,0x49,0x2a,0x00,0x08,0x00,0x00,0x00,0x01,0x00,0x41,0x57,0x07,0x00,0x00,0x00,0x00,0x00,0x16,0x00,0x00,0x00]), metadata])
   exif.writeUInt32LE(metadata.length, 14)
   return exif
 }
 
-function addStickerMetadata(webp, pack, author) {
+function addStickerMetadata(webp, pack, author, { fresh = false } = {}) {
   const chunks = parseWebpChunks(webp)
   const filtered = chunks.filter(chunk => chunk.type !== 'EXIF')
   let vp8x = filtered.find(chunk => chunk.type === 'VP8X')
@@ -161,7 +162,7 @@ function addStickerMetadata(webp, pack, author) {
     if (!width || !height) throw new Error('No pude leer las dimensiones del sticker.')
     const data = Buffer.alloc(10); data[0] = 0x08 | (hasAlpha ? 0x10 : 0); writeUInt24LE(data, width - 1, 4); writeUInt24LE(data, height - 1, 7); vp8x = { type: 'VP8X', data }; filtered.unshift(vp8x)
   }
-  const exifChunk = { type: 'EXIF', data: buildStickerExif(pack, author) }
+  const exifChunk = { type: 'EXIF', data: buildStickerExif(pack, author, fresh) }
   const xmpIndex = filtered.findIndex(chunk => chunk.type === 'XMP ')
   if (xmpIndex >= 0) filtered.splice(xmpIndex, 0, exifChunk); else filtered.push(exifChunk)
   return rebuildWebp(filtered)
@@ -188,7 +189,7 @@ async function ske(ctx) {
     const webp = await mediaAsWebp(ctx)
     const customName = ctx.args.join(' ').trim()
     if (!customName) return ctx.reply('❌ Escribe el nombre. Ejemplo: *.ske Randy*')
-    return ctx.sock.sendMessage(ctx.jid, { sticker: addStickerMetadata(webp, customName.slice(0, 100), '') }, { quoted: ctx.msg })
+    return ctx.sock.sendMessage(ctx.jid, { sticker: addStickerMetadata(webp, customName.slice(0, 100), '', { fresh: true }) }, { quoted: ctx.msg })
   } catch (error) { console.error('SKE sticker error:', error); return ctx.reply('❌ No pude crear ese sticker. Responde a una imagen o sticker con *.ske Nombre*.') }
 }
 
@@ -239,5 +240,5 @@ export const stickerCommands = {
     try { const { buffer, type } = await ctx.downloadQuotedOrCurrent(); if (!type.includes('stickerMessage')) return ctx.reply('Responde a un sticker con .toimg'); const png = await sharp(buffer).png().toBuffer(); return ctx.sock.sendMessage(ctx.jid, { image: png, caption: '✅ Sticker convertido.' }, { quoted: ctx.msg }) }
     catch { return ctx.reply('❌ No pude convertir ese sticker.') }
   },
-  stickerinfo: async ctx => ctx.reply('🎨 *COMANDOS DE STICKERS*\n• *.sticker* / *.s* → convierte imagen o video corto en sticker.\n• *.letr texto* → sticker de texto en MAYÚSCULAS, fondo blanco completo y letra fina.\n• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n• *.ske Nombre* → sticker con SOLO el nombre que escribas, sin nombre del bot.\n• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n• *.toimg* → convierte un sticker en imagen.')
+  stickerinfo: async ctx => ctx.reply('🎨 *COMANDOS DE STICKERS*\n• *.sticker* / *.s* → convierte imagen o video corto en sticker.\n• *.letr texto* → sticker de texto en MAYÚSCULAS, fondo blanco completo y letra fina.\n• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n• *.ske Nombre* → crea una copia nueva del sticker con SOLO ese nombre, sin autor. Si tenías la versión anterior en Favoritos, elimínala y guarda la nueva; WhatsApp no permite renombrar favoritos existentes desde el bot.\n• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n• *.toimg* → convierte un sticker en imagen.')
 }
