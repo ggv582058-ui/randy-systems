@@ -29,6 +29,10 @@ services:
         value: "15000"
       - key: SESSION_ENCRYPTION_KEY
         sync: false
+      - key: SETUP_TOKEN
+        sync: false
+      - key: MAX_LINKED_ACCOUNTS
+        value: "6"
       - key: OWNER_NUMBER
         sync: false
       - key: GROUP_LINK
