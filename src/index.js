@@ -69,7 +69,7 @@ app.get('/api/accounts', (req, res) => {
 app.post('/api/pair', async (req, res) => {
   if (!config.setupToken) return res.status(503).json({ error: 'Configura SETUP_TOKEN para proteger la vinculación de cuentas.' })
   if (!setupAuthorized(req)) return res.status(401).json({ error: 'Acceso no autorizado.' })
-  const phone = String(req.body?.phone || '').replace(/\\D/g, '')
+  const phone = String(req.body?.phone || '').replace(/\D/g, '')
   if (phone.length < 8 || phone.length > 15) return res.status(400).json({ error: 'Escribe el número completo con código de país.' })
   if (pairingBusy) return res.status(429).json({ error: 'Ya existe una solicitud de vinculación en curso.' })
   pairingBusy = true
@@ -98,7 +98,7 @@ app.post('/api/pair', async (req, res) => {
     }
     runtime.pairingPhone = phone
     runtime.pairingRequestedAt = new Date().toISOString()
-    const code = String(await primarySock.requestPairingCode(phone) || '').replace(/\\s/g, '')
+    const code = String(await primarySock.requestPairingCode(phone) || '').replace(/\s/g, '')
     if (!code) throw new Error('WhatsApp devolvió un código vacío para la cuenta principal.')
     runtime.connection = 'pairing'
     return res.json({ ok: true, phone, code, accountType: 'primary' })
