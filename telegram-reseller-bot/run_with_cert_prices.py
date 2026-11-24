@@ -104,7 +104,7 @@ async def show_my_certificates(update, context) -> None:
             f"├ 📱 Dispositivo: <b>{html.escape(device)}</b>\n"
             f"├ 🧬 Plan: <b>#{plan}</b>\n"
             f"├ 🗓️ Registrado: <b>{html.escape(created)}</b>\n"
-            f"├ 🛡️ Garantía: <b>activa según el plan</b>\n"
+            f"├ 🛡️ Garantía estimada: <b>{html.escape(bot.HealthHandler._warranty(current))}</b>\n"
             f"├ 🔐 P12: <code>{password}</code>\n"
             f"╰ 🛰️ Orden: <code>{order_code}</code>",
             parse_mode=ParseMode.HTML,
@@ -191,7 +191,7 @@ async def show_certificate_offer(update):
         "━━━━━━━━━━━━━━━━━━\n"
         f"💵 Precio: <b>{bot.money(price)}</b>\n"
         f"📅 Validez: <b>{html.escape(str(plan.get('validity') or '12 meses'))}</b>\n"
-        f"🛡️ Garantía: <b>{html.escape(str(plan.get('warranty') or 'según el plan'))}</b>\n"
+        "🛡️ Garantía de la tienda: <b>50 días</b>\n"
         "📦 Incluye <code>.p12</code> + <code>.mobileprovision</code> + entrega web privada.\n\n"
         "🔵 Después del pago registrarás tu <b>UDID</b> y podrás consultar el certificado siempre desde <b>💠 Tu certificado</b>.\n\n"
         "El costo se descontará de tu saldo del bot."

@@ -9,6 +9,7 @@ import time
 import urllib.request
 import zipfile
 from PIL import Image, ImageOps
+from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument, WebAppInfo
 from telegram.constants import ParseMode
@@ -151,29 +152,38 @@ def app_selector_menu(order, custom_icons=True):
         if base.startswith("https://") and bot.db.signed_certificate_app(order_id, kind):
             return {"web_app": WebAppInfo(f"{base}/certificate/mini/{order['install_token']}?app={kind}")}
         return {"callback_data": f"certapp:sign_{kind}:{order_id}"}
+    ready = base.startswith("https://") and bool(bot.db.signed_certificate_app(order_id, "gbox"))
     rows = [[InlineKeyboardButton(
-        "GBox" if custom_icons and bot.certificate_emoji("gbox") else "🟩 GBox",
+        "Instalar GBox" if ready else "Firmar con GBox",
         **destination("gbox"),
         icon_custom_emoji_id=bot.certificate_emoji("gbox") if custom_icons else None,
-        style="primary" if custom_icons else None,
+        style="success" if custom_icons else None,
     )]]
-    if base.startswith("https://"):
-        rows.append([bot.emoji_button("🌐 Mi certificado en la web", "web_certificate",
-                                      url=f"{base}/certificate/install/{order['install_token']}")])
     return InlineKeyboardMarkup(rows)
 
 
 async def send_app_selector(tg_bot, order):
-    text = ("<b>Aplicación para tu certificado</b>\n"
-            "Toca GBox para preparar la instalación en tu dispositivo.")
+    text = ("<b>GBox · Instalación privada</b>\n"
+            "Toca Firmar con GBox para preparar la aplicación con tu certificado.")
+    logo = (Path(__file__).resolve().parent / "gbox-logo.jpg").read_bytes()
+    def picture():
+        stream = io.BytesIO(app_tile(logo, "GBox"))
+        stream.name = "gbox-card.jpg"
+        return stream
     try:
-        await tg_bot.send_message(order["user_id"], text, parse_mode=ParseMode.HTML,
-                                  reply_markup=app_selector_menu(order))
+        await tg_bot.send_photo(order["user_id"], picture(), caption=text, parse_mode=ParseMode.HTML,
+                                reply_markup=app_selector_menu(order))
     except BadRequest as exc:
         if not any(word in str(exc).lower() for word in ("emoji", "button", "style")):
             raise
-        await tg_bot.send_message(order["user_id"], text, parse_mode=ParseMode.HTML,
-                                  reply_markup=app_selector_menu(order, custom_icons=False))
+        await tg_bot.send_photo(order["user_id"], picture(), caption=text, parse_mode=ParseMode.HTML,
+                                reply_markup=app_selector_menu(order, custom_icons=False))
+
+
+async def update_signing_card(message, text, markup=None):
+    edit = message.edit_caption if getattr(message, "photo", None) else message.edit_text
+    field = "caption" if getattr(message, "photo", None) else "text"
+    await edit(**{field: text}, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def deliver(tg_bot, order):
@@ -223,18 +233,19 @@ async def certificate_callback(update, context):
             return
         if bot.db.signed_certificate_app(order_id, kind):
             await query.answer("Ya está preparada")
-            await query.message.reply_text(f"✅ {APPS[kind]} está lista para instalar.", reply_markup=app_menu(order, kind))
+            await update_signing_card(query.message, f"✅ <b>{APPS[kind]} lista para instalar</b>",
+                                      app_selector_menu(order) if kind == "gbox" else app_menu(order, kind))
             return
         if key in _signing:
             await query.answer("La firma ya está en curso", show_alert=True)
             return
         _signing.add(key)
-        await query.answer("Preparando firma privada…")
-        status_message = await query.message.reply_text(f"⏳ Firmando {APPS[kind]} para tu dispositivo. Puede tardar unos minutos.")
         try:
+            await query.answer("Preparando firma privada…")
+            await update_signing_card(query.message, f"⏳ Firmando {APPS[kind]} para tu dispositivo…")
             source = bot.db.certificate_ipa(kind)
             if not source and kind == "gbox":
-                await status_message.edit_text("⏳ Descargando GBox oficial para preparar tu instalación…")
+                await update_signing_card(query.message, "⏳ Descargando GBox oficial…")
                 def load_gbox():
                     request = urllib.request.Request("https://cdn.gbox.run/d/apps/GBox_v6.1.2.ipa",
                                                      headers={"User-Agent": "RandyCertificates/1.0"})
@@ -244,7 +255,7 @@ async def certificate_callback(update, context):
                     bot.db.set_certificate_ipa("gbox", payload, bundle_id, version)
                 await asyncio.to_thread(load_gbox)
                 source = bot.db.certificate_ipa(kind)
-                await status_message.edit_text("⏳ GBox cargada. Firmando para tu dispositivo…")
+                await update_signing_card(query.message, "⏳ GBox cargada. Firmando para tu dispositivo…")
             if not source:
                 raise SigningError("ESign aún no está cargada. Pide al administrador que suba su IPA como documento.")
             certificate = await asyncio.to_thread(bot.chungchi.download, order["download_url"])
@@ -252,20 +263,18 @@ async def certificate_callback(update, context):
                 sign_ipa, source["ipa"], certificate, order["p12_password"], order["udid"],
                 bot.settings.database_path.parent / "signing-cache")
             await asyncio.to_thread(bot.db.set_signed_certificate_app, order_id, kind, signed, bundle_id, version)
-            await status_message.edit_text(
+            await update_signing_card(
+                query.message,
                 f"✅ <b>{APPS[kind]} v{html.escape(version)} lista para instalar</b>\n"
-                f"Abre {APPS[kind]} desde Telegram; si iOS lo solicita, continúa en Safari.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=app_menu(order, kind))
-            try:
-                await query.message.edit_reply_markup(reply_markup=app_selector_menu(order))
-            except Exception:
-                log.info("No se pudo actualizar el botón de instalación del pedido %s", order_id)
+                "Toca Instalar GBox y confirma cuando iOS lo solicite.",
+                app_selector_menu(order) if kind == "gbox" else app_menu(order, kind))
         except SigningError as exc:
-            await status_message.edit_text(f"⚠️ No se pudo preparar {APPS[kind]}: {exc}")
+            await update_signing_card(query.message, f"⚠️ No se pudo preparar {APPS[kind]}: {html.escape(str(exc))}",
+                                      app_selector_menu(order) if kind == "gbox" else app_menu(order, kind))
         except Exception:
             log.exception("Fallo firmando aplicación %s para pedido %s", kind, order_id)
-            await status_message.edit_text("⚠️ Error temporal al preparar la IPA. Intenta otra vez más tarde.")
+            await update_signing_card(query.message, "⚠️ Error temporal al preparar la IPA. Intenta otra vez.",
+                                      app_selector_menu(order) if kind == "gbox" else app_menu(order, kind))
         finally:
             _signing.discard(key)
         return

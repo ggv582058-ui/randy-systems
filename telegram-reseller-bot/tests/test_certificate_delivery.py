@@ -46,7 +46,7 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
              patch.dict("os.environ", {"RENDER_EXTERNAL_URL": "https://example.test"}):
             await experience.send_files(client, order)
             await experience.send_app_selector(client, order)
-        self.assertEqual([item[0] for item in events], ["message", "documents", "message", "message"])
+        self.assertEqual([item[0] for item in events], ["message", "documents", "message", "app"])
         self.assertEqual([item.caption for item in events[1][1][1]],
                          [bot.developer_text("P12 · Test User"), bot.developer_text("Perfil · Test User")])
         self.assertEqual([item.media.filename for item in events[1][1][1]],
@@ -56,9 +56,10 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
         buttons = events[3][2]["reply_markup"].inline_keyboard
         self.assertEqual([button.callback_data for button in buttons[0]],
                          ["certapp:sign_gbox:41"])
-        self.assertIn("Toca GBox", events[3][1][1])
-        self.assertNotIn("ESign", events[3][1][1])
-        self.assertIn("/certificate/install/private", buttons[-1][0].url)
+        self.assertIn("Firmar con GBox", events[3][2]["caption"])
+        self.assertNotIn("ESign", events[3][2]["caption"])
+        self.assertEqual(len(buttons), 1)
+        self.assertEqual(len(buttons[0]), 1)
         with patch.object(bot.db, "signed_certificate_app", return_value={"version": "6.1.2"}), \
              patch.dict("os.environ", {"RENDER_EXTERNAL_URL": "https://example.test"}):
             signed_buttons = experience.app_menu(order).inline_keyboard
@@ -72,7 +73,7 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot.db, "signed_certificate_app", return_value=None), patch.object(bot, "certificate_emoji", side_effect=lambda slot: "5319007286004299794" if slot == "gbox" else None):
             buttons = experience.app_selector_menu({"id": 41, "install_token": "private"}).inline_keyboard[0]
         self.assertEqual(buttons[0].icon_custom_emoji_id, "5319007286004299794")
-        self.assertEqual(buttons[0].text, "GBox")
+        self.assertEqual(buttons[0].text, "Firmar con GBox")
         self.assertEqual(len(buttons), 1)
 
     def test_ready_gbox_opens_mini_directly_without_esign(self):
@@ -82,6 +83,19 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(buttons[0].web_app.url, "https://example.test/certificate/mini/private?app=gbox")
             self.assertIsNone(buttons[0].callback_data)
             self.assertEqual(len(buttons), 1)
+
+    async def test_signing_card_edits_photo_caption_in_place(self):
+        message = AsyncMock()
+        message.photo = [object()]
+        await experience.update_signing_card(message, "Firmando GBox")
+        message.edit_caption.assert_awaited_once()
+        message.reply_text.assert_not_awaited()
+
+    def test_store_warranty_is_fifty_days(self):
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        order = {"completed_at": (now - timedelta(days=1)).isoformat(), "created_at": None}
+        self.assertTrue(bot.HealthHandler._warranty(order).startswith(("48d ", "49d ")))
 
     async def test_old_delivery_buttons_refresh_without_an_extra_chat_message(self):
         order = {"id": 41, "user_id": 123, "status": "completed", "download_url": "private", "install_token": "private"}

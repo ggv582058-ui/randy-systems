@@ -177,19 +177,19 @@ class HealthHandler(BaseHTTPRequestHandler):
     def _warranty(order) -> str:
         base = order["completed_at"] or order["created_at"]
         if not base:
-            return "30 días"
+            return "50 días"
         try:
             created = datetime.fromisoformat(str(base).replace("Z", "+00:00"))
             now = datetime.now(timezone.utc)
             if created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)
-            seconds = max(0, int((created.timestamp() + 30 * 86400) - now.timestamp()))
+            seconds = max(0, int((created.timestamp() + 50 * 86400) - now.timestamp()))
             days, rem = divmod(seconds, 86400)
             hours, rem = divmod(rem, 3600)
             minutes = rem // 60
             return f"{days}d {hours}h {minutes}m"
         except Exception:
-            return "30 días"
+            return "50 días"
 
     def _certificate_mini(self, token: str, kind: str) -> None:
         if kind not in ("gbox", "esign"):
@@ -207,7 +207,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         launch_url = f"{base}/certificate/launch/{safe_token}?app={kind}"
         main_button = (f'<button id="install" class="install" type="button">Instalar {name} <span>↗</span></button>'
                        if signed and base.startswith("https://") else
-                       f'<div class="waiting">La firma de la app aún no está lista. Vuelve al bot y toca <b>Preparar {name}</b>.</div>')
+                       f'<div class="waiting">La firma de la app aún no está lista. Vuelve al bot y toca <b>Firmar con {name}</b>.</div>')
         body = f'''<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#030916"><title>{name} · Randy Mod</title>

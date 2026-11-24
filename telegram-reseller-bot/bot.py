@@ -880,7 +880,7 @@ async def show_certificate_offer(update: Update) -> None:
         "🍎 <b>CERTIFICADO iOS</b>\n━━━━━━━━━━━━━━━━━━\n"
         f"💵 Precio: <b>{money(settings.chungchi_sell_price_cents)}</b>\n"
         f"📅 Validez: <b>{html.escape(str(plan.get('validity') or '12 meses'))}</b>\n"
-        f"🛡️ Garantía: <b>{html.escape(str(plan.get('warranty') or 'según el plan'))}</b>\n"
+        "🛡️ Garantía de la tienda: <b>50 días</b>\n"
         "📦 Incluye <code>.p12</code>, contraseña y <code>.mobileprovision</code>.\n\n"
         "El costo se descontará de tu saldo del bot.",
         reply_markup=keys,

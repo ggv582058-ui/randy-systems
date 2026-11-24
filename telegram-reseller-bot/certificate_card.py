@@ -105,7 +105,7 @@ def app_tile(logo: bytes | None, name: str = "GBox") -> bytes:
         draw.text((126, 121), name[0], anchor="mm", font=_font(85, True), fill="#99daff")
     draw.text((246, 59), "RANDY MOD  /  INSTALACIÓN PRIVADA", font=_font(19, True), fill="#93ffce" if green else "#8dbdec")
     draw.text((244, 94), name, font=_font(54, True), fill="#ffffff")
-    draw.text((246, 164), "Tu app · tu certificado", font=_font(25), fill="#cdf8e4" if green else "#c4dcf5")
+    draw.text((246, 164), "Firma privada para tu dispositivo iOS", font=_font(25), fill="#cdf8e4" if green else "#c4dcf5")
     output = io.BytesIO()
     picture.save(output, format="JPEG", quality=86, optimize=True)
     return output.getvalue()
