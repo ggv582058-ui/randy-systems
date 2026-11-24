@@ -109,3 +109,46 @@ def app_tile(logo: bytes | None, name: str = "GBox") -> bytes:
     output = io.BytesIO()
     picture.save(output, format="JPEG", quality=86, optimize=True)
     return output.getvalue()
+
+
+def purchase_offer_card(cover: bytes | None, price: str, validity: str) -> bytes:
+    """Render a compact blue certificate offer using the current customer's price."""
+    width, height = 960, 1090
+    picture = Image.new("RGB", (width, height), "#07101e")
+    draw = ImageDraw.Draw(picture)
+    for y in range(height):
+        draw.line((0, y, width, y), fill=(5 + y // 250, 12 + y // 100, 25 + y // 55))
+    if cover:
+        try:
+            with Image.open(io.BytesIO(cover)) as source:
+                banner = ImageOps.fit(source.convert("RGB"), (928, 370))
+                mask = Image.new("L", banner.size, 0)
+                ImageDraw.Draw(mask).rounded_rectangle((0, 0, 927, 369), radius=28, fill=255)
+                picture.paste(banner, (16, 16), mask)
+        except (OSError, ValueError):
+            pass
+    draw.rounded_rectangle((16, 400, 943, 1072), radius=36, fill="#09192c", outline="#356da8", width=3)
+    # Crown and shield artwork, distinct from the Telegram emoji layer.
+    draw.polygon(((49, 438), (99, 420), (149, 438), (144, 488), (99, 526), (54, 488)), fill="#153f73", outline="#75c9ff", width=3)
+    draw.polygon(((70, 457), (80, 482), (119, 482), (130, 457), (112, 468), (100, 445), (86, 468)), fill="#d5edff")
+    draw.text((178, 427), "RANDY", font=_font(34, True), fill="#ffffff")
+    draw.text((178, 471), "CERTIFICATE SYSTEM", font=_font(40, True), fill="#83c9ff")
+    draw.rounded_rectangle((178, 527, 902, 573), radius=20, fill="#102d4c")
+    draw.text((198, 537), "SECURE PURCHASE  /  READY", font=_font(23, True), fill="#a6d9ff")
+    rows = (("01", "PRECIO", str(price)), ("02", "VALIDEZ", str(validity)), ("03", "GARANTÍA DE LA TIENDA", "50 días"))
+    for idx, (num, label, value) in enumerate(rows):
+        y = 598 + idx * 112
+        draw.rounded_rectangle((43, y, 916, y+96), radius=22, fill="#102640", outline="#254c77", width=2)
+        draw.rounded_rectangle((60, y+18, 120, y+78), radius=14, fill="#1a4c80")
+        draw.text((90, y+48), num, font=_font(24, True), anchor="mm", fill="#bdeaff")
+        draw.text((144, y+13), label, font=_font(20, True), fill="#9cbfdf")
+        size = 33
+        while size > 16 and draw.textlength(value, font=_font(size, True)) > 735:
+            size -= 1
+        draw.text((144, y+42), value, font=_font(size, True), fill="#ffffff")
+    draw.line((48, 950, 912, 950), fill="#3978b4", width=2)
+    draw.text((50, 972), "P12 + MobileProvision + GBox", font=_font(29, True), fill="#e4f2ff")
+    draw.text((50, 1016), "Entrega privada  ·  Registro por UDID", font=_font(24), fill="#9cbfdf")
+    output = io.BytesIO()
+    picture.save(output, format="JPEG", quality=91, optimize=True)
+    return output.getvalue()

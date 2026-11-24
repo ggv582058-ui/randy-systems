@@ -847,6 +847,26 @@ def safe_certificate_name(value: str) -> str:
     return clean[:40]
 
 
+def certificate_purchase_buttons():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Comprar certificado", callback_data="cert:confirm", style="success")],
+        [InlineKeyboardButton("❌ Cancelar", callback_data="cancel", style="danger")],
+    ])
+
+
+def certificate_purchase_caption(price, validity):
+    return (
+        "💎 <b>RANDY CERTIFICATE SYSTEM</b>\n"
+        "🍎 <b>Certificado iOS · Acceso privado</b>\n\n"
+        f"💵 Precio: <b>{money(price)}</b>\n"
+        f"📅 Validez: <b>{html.escape(str(validity))}</b>\n"
+        "🛡️ Garantía de la tienda: <b>50 días</b>\n\n"
+        "📦 P12, contraseña, MobileProvision y GBox.\n"
+        "🔐 Entrega privada y registro de tu UDID después de pagar.\n"
+        "💳 El importe se descuenta de tu saldo."
+    )
+
+
 async def show_certificate_offer(update: Update) -> None:
     if not scope_allows(current_user(update), "certificates"):
         await update.effective_message.reply_text("🔒 Tu catálogo no incluye certificados.")
@@ -872,18 +892,12 @@ async def show_certificate_offer(update: Update) -> None:
     if provider_balance < provider_cost:
         await update.effective_message.reply_text("⚠️ Certificados agotados temporalmente. Contacta al soporte.")
         return
-    keys = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Comprar", callback_data="cert:confirm"),
-        InlineKeyboardButton("❌ Cancelar", callback_data="cancel"),
-    ]])
+    validity = str(plan.get("validity") or "12 meses")
+    if validity.strip().lower() == "valid for 12 months":
+        validity = "12 meses"
     await update.effective_message.reply_text(
-        "🍎 <b>CERTIFICADO iOS</b>\n━━━━━━━━━━━━━━━━━━\n"
-        f"💵 Precio: <b>{money(settings.chungchi_sell_price_cents)}</b>\n"
-        f"📅 Validez: <b>{html.escape(str(plan.get('validity') or '12 meses'))}</b>\n"
-        "🛡️ Garantía de la tienda: <b>50 días</b>\n"
-        "📦 Incluye <code>.p12</code>, contraseña y <code>.mobileprovision</code>.\n\n"
-        "El costo se descontará de tu saldo del bot.",
-        reply_markup=keys,
+        certificate_purchase_caption(settings.chungchi_sell_price_cents, validity),
+        reply_markup=certificate_purchase_buttons(),
         parse_mode=ParseMode.HTML,
     )
 

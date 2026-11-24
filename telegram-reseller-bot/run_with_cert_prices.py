@@ -13,6 +13,7 @@ from telegram.constants import ParseMode
 import bot
 from database import InsufficientBalance, NotApproved, ProductRestricted
 from chungchi_api import ChungChiError
+from certificate_card import purchase_offer_card
 
 
 def cert_price_key(user_id: int) -> str:
@@ -181,33 +182,24 @@ async def show_certificate_offer(update):
         await loading.edit_text("⚠️ Certificados agotados temporalmente. Contacta al soporte.")
         return
     price = certificate_price(update.effective_user.id)
-    keys = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Comprar certificado", callback_data="cert:confirm"),
-        InlineKeyboardButton("❌ Cancelar", callback_data="cancel"),
-    ]])
-    offer = (
-        "🤖🍎 <b>RANDY CERTIFICATE SYSTEM</b>\n"
-        "<code>secure.purchase.module = READY</code>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"💵 Precio: <b>{bot.money(price)}</b>\n"
-        f"📅 Validez: <b>{html.escape(str(plan.get('validity') or '12 meses'))}</b>\n"
-        "🛡️ Garantía de la tienda: <b>50 días</b>\n"
-        "📦 Incluye <code>.p12</code> + <code>.mobileprovision</code> + entrega web privada.\n\n"
-        "🔵 Después del pago registrarás tu <b>UDID</b> y podrás consultar el certificado siempre desde <b>💠 Tu certificado</b>.\n\n"
-        "El costo se descontará de tu saldo del bot."
-    )
+    validity = str(plan.get("validity") or "12 meses")
+    if validity.strip().lower() == "valid for 12 months":
+        validity = "12 meses"
+    keys = bot.certificate_purchase_buttons()
+    offer = bot.certificate_purchase_caption(price, validity)
     cover = bot.db.certificate_offer_photo() or bot.randy_cover()
-    if cover:
-        await loading.delete()
-        photo = io.BytesIO(cover)
-        photo.name = "certificate.jpg"
-        try:
-            await update.effective_message.reply_photo(photo, caption=offer, reply_markup=keys, parse_mode=ParseMode.HTML)
-        except Exception as exc:
-            bot.log.warning("No se pudo mostrar portada del certificado: %s", exc)
-            await update.effective_message.reply_text(offer, reply_markup=keys, parse_mode=ParseMode.HTML)
-    else:
+    try:
+        photo = io.BytesIO(purchase_offer_card(cover, bot.money(price), validity))
+        photo.name = "certificate-premium.jpg"
+        await update.effective_message.reply_photo(photo, caption=offer, reply_markup=keys, parse_mode=ParseMode.HTML)
+    except Exception as exc:
+        bot.log.warning("No se pudo mostrar tarjeta del certificado: %s", exc)
         await loading.edit_text(offer, reply_markup=keys, parse_mode=ParseMode.HTML)
+    else:
+        try:
+            await loading.delete()
+        except Exception:
+            bot.log.debug("No se pudo eliminar aviso de carga")
 
 
 _original_callback = bot.callback
