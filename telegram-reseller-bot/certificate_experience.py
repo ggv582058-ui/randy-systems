@@ -156,11 +156,6 @@ def app_selector_menu(order, custom_icons=True):
         **destination("gbox"),
         icon_custom_emoji_id=bot.certificate_emoji("gbox") if custom_icons else None,
         style="primary" if custom_icons else None,
-    ), InlineKeyboardButton(
-        "ESign" if custom_icons and bot.certificate_emoji("esign") else "🔷 ESign",
-        **destination("esign"),
-        icon_custom_emoji_id=bot.certificate_emoji("esign") if custom_icons else None,
-        style="primary" if custom_icons else None,
     )]]
     if base.startswith("https://"):
         rows.append([bot.emoji_button("🌐 Mi certificado en la web", "web_certificate",
@@ -169,8 +164,8 @@ def app_selector_menu(order, custom_icons=True):
 
 
 async def send_app_selector(tg_bot, order):
-    text = ("<b>Aplicaciones para tu certificado</b>\n"
-            "Elige GBox o ESign para preparar la instalación en tu dispositivo.")
+    text = ("<b>Aplicación para tu certificado</b>\n"
+            "Toca GBox para preparar la instalación en tu dispositivo.")
     try:
         await tg_bot.send_message(order["user_id"], text, parse_mode=ParseMode.HTML,
                                   reply_markup=app_selector_menu(order))
