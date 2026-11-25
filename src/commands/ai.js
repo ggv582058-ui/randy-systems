@@ -85,6 +85,22 @@ async function translateWithoutKey(targetLanguage, text) {
   return translated
 }
 
+const conversations = new Map()
+const busyConversations = new Set()
+const memoryTTL = 20 * 60 * 1000
+function conversationKey(ctx) {
+  return JSON.stringify([ctx.jid, ctx.sender || ctx.senderNumber || ctx.msg?.key?.participant || ctx.jid])
+}
+function getHistory(key) {
+  const entry = conversations.get(key)
+  if (!entry || entry.expires <= Date.now()) { conversations.delete(key); return [] }
+  return entry.messages
+}
+function saveHistory(key, messages) {
+  conversations.delete(key)
+  conversations.set(key, { expires: Date.now() + memoryTTL, messages: messages.slice(-6) })
+  if (conversations.size > 200) conversations.delete(conversations.keys().next().value)
+}
 let activeQuestions = 0
 const lastQuestion = new Map()
 async function generalQuestion(ctx) {
@@ -97,16 +113,25 @@ async function generalQuestion(ctx) {
     if (activeQuestions >= 3) return ctx.reply('⏳ La IA está atendiendo otras consultas. Intenta de nuevo.')
     if (lastQuestion.size >= 1000) lastQuestion.delete(lastQuestion.keys().next().value)
     lastQuestion.set(key, now)
+    const conversation = conversationKey(ctx)
+    if (busyConversations.has(conversation)) return ctx.reply('⏳ Espera a que termine tu consulta anterior.')
+    busyConversations.add(conversation)
     activeQuestions++
     try {
       await ctx.react('🤖').catch(() => {})
-      const answer = await ask(ctx.argText)
-      if (answer) return ctx.reply(answer)
+      const input = [...getHistory(conversation), { role: 'user', content: ctx.argText }]
+      const answer = await ask(input)
+      if (answer) {
+        await ctx.reply(answer)
+        saveHistory(conversation, [...input, { role: 'assistant', content: answer.slice(0, 6000) }])
+        return
+      }
       return ctx.reply('⚠️ *.ia* necesita una OPENAI_API_KEY configurada en Render. *.resumir* y *.traducir* ya funcionan sin esa clave.')
     } catch (error) {
       console.error('AI command error:', error?.status || error?.code || 'unknown')
       return ctx.reply('❌ La IA no pudo responder ahora. Intenta de nuevo; si persiste, el administrador debe revisar la API.')
     } finally {
+      busyConversations.delete(conversation)
       activeQuestions--
     }
 }
@@ -116,6 +141,12 @@ export const aiCommands = {
   ai: generalQuestion,
   pregunta: generalQuestion,
   chatgpt: generalQuestion,
+  resetia: async ctx => {
+    const key = conversationKey(ctx)
+    if (busyConversations.has(key)) return ctx.reply('⏳ Espera a que termine tu consulta anterior.')
+    conversations.delete(key)
+    return ctx.reply('🧹 Conversación de IA reiniciada.')
+  },
 
   resumir: async ctx => {
     if (!ctx.argText) return ctx.reply('Uso: .resumir texto')
