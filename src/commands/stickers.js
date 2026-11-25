@@ -244,6 +244,45 @@ async function cl(ctx) {
 // Extend only the sticker wire codec, leaving the pinned connection library intact.
 const StickerProto = proto.Message.StickerMessage
 const originalStickerEncode = StickerProto.encode
+const originalStickerDecode = StickerProto.decode
+// Inspect wire tags on the explicitly quoted sticker, without retaining media bytes.
+const stickerWireFields = new WeakMap()
+StickerProto.decode = function(reader, length, ...rest) {
+  const input = reader?.buf instanceof Uint8Array ? reader.buf : reader instanceof Uint8Array ? reader : null
+  const start = reader?.pos ?? 0
+  const end = length == null ? (reader?.len ?? input?.length ?? 0) : start + length
+  const result = originalStickerDecode.call(this, reader, length, ...rest)
+  if (!input || end > input.length || end - start > 262144) return result
+  try {
+    let pos = start
+    function readVarint() {
+      let value = 0, factor = 1
+      for (let i = 0; i < 10 && pos < end; i++) {
+        const b = input[pos++]
+        value += (b & 127) * factor
+        if (!(b & 128)) return value
+        factor *= 128
+      }
+      throw Error('invalid varint')
+    }
+    const fields = []
+    while (pos < end && fields.length < 100) {
+      const tag = readVarint(), field = Math.floor(tag / 8), wire = tag % 8
+      if (!field) break
+      let size = 0
+      if (wire === 0) { readVarint() }
+      else if (wire === 1) { pos += 8; size = 8 }
+      else if (wire === 5) { pos += 4; size = 4 }
+      else if (wire === 2) { size = readVarint(); pos += size }
+      else break
+      if (pos > end) break
+      fields.push(field + ':' + wire + (wire === 2 ? '(' + size + ' bytes)' : ''))
+    }
+    stickerWireFields.set(result, fields.join(', '))
+  } catch {}
+  return result
+}
+
 if (!StickerProto.prototype.audioMessage) {
   StickerProto.prototype.audioMessage = null
   StickerProto.encode = function(message, writer) {
@@ -334,6 +373,8 @@ async function soundInfo(ctx) {
     }
   }
   walk(quoted)
+  const wire = quoted.stickerMessage && stickerWireFields.get(quoted.stickerMessage)
+  lines.push('Wire tags: ' + (wire || 'no disponibles; el mensaje pudo ser reconstruido'))
   return ctx.reply('🔬 SOUND INFO — campos reconocidos por Baileys\n' + (lines.join('\n') || 'Sin campos reconocidos') + '\nLos campos desconocidos pueden haber sido descartados por el decodificador.')
 }
 
