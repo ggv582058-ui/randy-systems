@@ -314,7 +314,31 @@ async function stickerWithAudio(ctx) {
   }
 }
 
+// Inspect only the shape of a deliberately quoted message; never expose keys or media URLs.
+async function soundInfo(ctx) {
+  const quoted = ctx.msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+  if (!quoted) return ctx.reply('Responde a un sticker sonoro original con .soundinfo.')
+  const lines = []
+  function walk(obj, prefix = '', depth = 0) {
+    if (!obj || typeof obj !== 'object' || depth > 5 || lines.length >= 60) return
+    for (const key of Object.keys(obj)) {
+      if (lines.length >= 60) break
+      const value = obj[key]
+      if (value == null) continue
+      const path = prefix + key
+      if (['contextInfo','mediaKey','fileSha256','fileEncSha256','url','directPath','participant','remoteJid','stanzaId'].includes(key)) continue
+      if (Buffer.isBuffer(value) || value instanceof Uint8Array) lines.push(path + ': bytes (' + value.length + ')')
+      else if (typeof value === 'object') { lines.push(path + ': object'); walk(value, path + '.', depth + 1) }
+      else if (['isAnimated','isLottie','seconds','mimetype','width','height'].includes(key)) lines.push(path + ': ' + String(value).slice(0,80))
+      else lines.push(path + ': ' + typeof value)
+    }
+  }
+  walk(quoted)
+  return ctx.reply('🔬 SOUND INFO — campos reconocidos por Baileys\n' + (lines.join('\n') || 'Sin campos reconocidos') + '\nLos campos desconocidos pueden haber sido descartados por el decodificador.')
+}
+
 export const stickerCommands = {
+  soundinfo: soundInfo,
   sa: stickerWithAudio,
   stickeraudio: stickerWithAudio,
   sticker: async ctx => {
