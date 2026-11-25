@@ -1,3 +1,4 @@
+import { proto, prepareWAMessageMedia, generateWAMessageFromContent } from '@whiskeysockets/baileys'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -240,6 +241,25 @@ async function cl(ctx) {
 }
 
 
+// Extend only the sticker wire codec, leaving the pinned connection library intact.
+const StickerProto = proto.Message.StickerMessage
+const originalStickerEncode = StickerProto.encode
+if (!StickerProto.prototype.audioMessage) {
+  StickerProto.prototype.audioMessage = null
+  StickerProto.encode = function(message, writer) {
+    writer = originalStickerEncode.call(this, message, writer)
+    if (message.audioMessage != null) proto.Message.AudioMessage.encode(message.audioMessage, writer.uint32(210).fork()).ldelim()
+    return writer
+  }
+  // The outgoing media is built below with an explicit field assignment.
+}
+function soundStickerCodecReady() {
+  const sample = new StickerProto({ isAnimated: true })
+  sample.audioMessage = new proto.Message.AudioMessage({ seconds: 3 })
+  const encoded = StickerProto.encode(sample).finish()
+  const tail = Array.from(encoded.slice(-5))
+  return tail.join(',') === '210,1,2,40,3'
+}
 let audioStickerBusy = false
 
 async function extractStickerAudio(buffer) {
@@ -274,12 +294,18 @@ async function stickerWithAudio(ctx) {
   audioStickerBusy = true
   try {
     const { buffer, type, content } = await ctx.downloadQuotedOrCurrent()
-    if (type !== 'videoMessage') return ctx.reply('🎵 Responde a un video con sonido de hasta 8 segundos usando *.sa*. Recibirás el sticker animado y su audio por separado.')
+    if (type !== 'videoMessage') return ctx.reply('🎵 Responde a un video con sonido de hasta 8 segundos usando *.sa*. Recibirás un sticker animado con sonido integrado (experimental).')
     if (Number(content?.seconds || 0) > 8 || buffer.length > 8 * 1024 * 1024) return ctx.reply('❌ Usa un video de máximo 8 segundos y 8 MB.')
     const audio = await extractStickerAudio(buffer)
     const sticker = await videoToWebp(buffer, true)
-    await ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
-    return await ctx.sock.sendMessage(ctx.jid, { audio, mimetype: 'audio/ogg; codecs=opus', ptt: true }, { quoted: ctx.msg })
+    if (!soundStickerCodecReady()) throw new Error('SOUND_STICKER_CODEC')
+    const options = { upload: ctx.sock.waUploadToServer }
+    const preparedSticker = await prepareWAMessageMedia({ sticker, isAnimated: true }, options)
+    const preparedAudio = await prepareWAMessageMedia({ audio, mimetype: 'audio/ogg; codecs=opus', ptt: true, seconds: Number(content?.seconds || 0) || undefined }, options)
+    const payload = generateWAMessageFromContent(ctx.jid, preparedSticker, { userJid: ctx.sock.user.id, quoted: ctx.msg })
+    payload.message.stickerMessage.audioMessage = preparedAudio.audioMessage
+    await ctx.sock.relayMessage(ctx.jid, payload.message, { messageId: payload.key.id })
+    return
   } catch (error) {
     console.error('Audio sticker error:', String(error?.message || error).slice(0, 200))
     return ctx.reply(error?.message === 'STICKER_SIZE_LIMIT' ? '❌ No logré comprimir este video al límite de WhatsApp. Intenta con otro clip.' : '❌ No pude crear el sticker con audio. Comprueba que el video tenga sonido y dure hasta 8 segundos; si hay otra conversión, intenta después.')
@@ -315,5 +341,5 @@ export const stickerCommands = {
     try { const { buffer, type } = await ctx.downloadQuotedOrCurrent(); if (!type.includes('stickerMessage')) return ctx.reply('Responde a un sticker con .toimg'); const png = await sharp(buffer).png().toBuffer(); return ctx.sock.sendMessage(ctx.jid, { image: png, caption: '✅ Sticker convertido.' }, { quoted: ctx.msg }) }
     catch { return ctx.reply('❌ No pude convertir ese sticker.') }
   },
-  stickerinfo: async ctx => ctx.reply('🎨 *COMANDOS DE STICKERS*\n• *.sticker* / *.s* → convierte imagen o video corto en sticker.\n• *.letr texto* → sticker de texto en MAYÚSCULAS, fondo blanco completo y letra fina.\n• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n• *.ske Nombre* → crea una copia nueva del sticker con SOLO ese nombre, sin autor. Si tenías la versión anterior en Favoritos, elimínala y guarda la nueva; WhatsApp no permite renombrar favoritos existentes desde el bot.\n• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n• *.toimg* → convierte un sticker en imagen.\n• *.sa* / *.stickeraudio* → sticker animado y nota de voz de un video con sonido (máx. 8 s).')
+  stickerinfo: async ctx => ctx.reply('🎨 *COMANDOS DE STICKERS*\n• *.sticker* / *.s* → convierte imagen o video corto en sticker.\n• *.letr texto* → sticker de texto en MAYÚSCULAS, fondo blanco completo y letra fina.\n• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n• *.ske Nombre* → crea una copia nueva del sticker con SOLO ese nombre, sin autor. Si tenías la versión anterior en Favoritos, elimínala y guarda la nueva; WhatsApp no permite renombrar favoritos existentes desde el bot.\n• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n• *.toimg* → convierte un sticker en imagen.\n• *.sa* / *.stickeraudio* → sticker animado con sonido integrado (experimental) de un video con sonido (máx. 8 s).')
 }
