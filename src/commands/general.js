@@ -41,8 +41,9 @@ export const generalCommands = {
     const caption = mainMenu({ name, number: ctx.senderNumber, isAdmin: ctx.isAdmin, isOwner: ctx.isOwner })
     return ctx.sock.sendMessage(ctx.jid, { image: await menuPicture(ctx.sock), caption, mentions: [ctx.sender] }, { quoted: ctx.msg })
   },
+  guiasonido: async ctx => ctx.reply('🔊 *𝗦𝗧𝗜𝗖𝗞𝗘𝗥 𝗦𝗢𝗨𝗡𝗗 • GUÍA*\n━━━━━━━━━━━━━━━━\n1. Abre un chat y el apartado de stickers.\n2. Pulsa Crear sticker y elige una foto o video.\n3. Toca el icono de ondas de sonido.\n4. Graba o selecciona un audio y recorta hasta 5 segundos.\n5. Guarda y envía el sticker.\n━━━━━━━━━━━━━━━━\nDisponible si tu versión de WhatsApp muestra esa opción. El comando .sa sigue en pruebas para audio nativo.'),
   comandos: async ctx => ctx.reply(allCommandsMenu()),
-  ping: async ctx => { const start = Date.now(); await ctx.react('⚡'); return ctx.reply(`🏓 Pong: ${Date.now() - start} ms`) },
+  ping: async ctx => { const start = Date.now(); await ctx.react('⚡'); return ctx.reply(`⚡ *LATENCIA* · ${Date.now() - start} ms`) },
   botinfo: async ctx => ctx.reply(`🤖 *${config.botName}*\nPrefijo: ${config.prefix}\nRuntime: ${formatUptime(process.uptime())}\nMotor: Baileys\nGrupo: ${config.groupLink}`),
   ayuda: async ctx => ctx.reply(`Usa *${config.prefix}menu* para ver las categorías.\nEjemplo: *${config.prefix}menu grupos*`),
   prefix: async ctx => ctx.reply(`Mi prefijo actual es: *${config.prefix}*`),
