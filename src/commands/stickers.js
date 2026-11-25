@@ -220,7 +220,58 @@ async function cl(ctx) {
   } catch (error) { console.error('CL sticker error:', error); return ctx.reply('❌ Responde a una imagen o sticker con *.cl*. El pack llevará tu nombre y el autor será RANDY SYSTEMS.') }
 }
 
+
+let audioStickerBusy = false
+
+async function extractStickerAudio(buffer) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'randy-audio-'))
+  const input = path.join(dir, 'input.mp4')
+  const output = path.join(dir, 'audio.ogg')
+  try {
+    await fs.writeFile(input, buffer)
+    await new Promise((resolve, reject) => {
+      const proc = spawn(ffmpegPath, [
+        '-nostdin', '-y', '-i', input, '-map', '0:a:0',
+        '-t', '8', '-vn', '-c:a', 'libopus', '-b:a', '48k', '-ac', '1', output
+      ], { stdio: ['ignore', 'ignore', 'pipe'] })
+      let stderr = ''
+      const timer = setTimeout(() => proc.kill('SIGKILL'), 20000)
+      proc.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-2000) })
+      proc.once('error', error => { clearTimeout(timer); reject(error) })
+      proc.once('close', code => {
+        clearTimeout(timer)
+        if (code === 0) resolve()
+        else reject(new Error('Audio unavailable: ' + stderr.slice(-400)))
+      })
+    })
+    return await fs.readFile(output)
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+async function stickerWithAudio(ctx) {
+  if (audioStickerBusy) return ctx.reply('⏳ Hay otro sticker con audio en proceso. Intenta nuevamente en unos segundos.')
+  audioStickerBusy = true
+  try {
+    const { buffer, type, content } = await ctx.downloadQuotedOrCurrent()
+    if (type !== 'videoMessage') return ctx.reply('🎵 Responde a un video con sonido de hasta 8 segundos usando *.sa*. Recibirás el sticker animado y su audio por separado.')
+    if (Number(content?.seconds || 0) > 8 || buffer.length > 8 * 1024 * 1024) return ctx.reply('❌ Usa un video de máximo 8 segundos y 8 MB.')
+    const audio = await extractStickerAudio(buffer)
+    const sticker = await videoToWebp(buffer)
+    await ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
+    return await ctx.sock.sendMessage(ctx.jid, { audio, mimetype: 'audio/ogg; codecs=opus', ptt: true }, { quoted: ctx.msg })
+  } catch (error) {
+    console.error('Audio sticker error:', String(error?.message || error).slice(0, 200))
+    return ctx.reply('❌ No pude crear el sticker con audio. Comprueba que el video tenga sonido y dure hasta 8 segundos.')
+  } finally {
+    audioStickerBusy = false
+  }
+}
+
 export const stickerCommands = {
+  sa: stickerWithAudio,
+  stickeraudio: stickerWithAudio,
   sticker: async ctx => {
     try {
       const { buffer, type, content } = await ctx.downloadQuotedOrCurrent()
@@ -245,5 +296,5 @@ export const stickerCommands = {
     try { const { buffer, type } = await ctx.downloadQuotedOrCurrent(); if (!type.includes('stickerMessage')) return ctx.reply('Responde a un sticker con .toimg'); const png = await sharp(buffer).png().toBuffer(); return ctx.sock.sendMessage(ctx.jid, { image: png, caption: '✅ Sticker convertido.' }, { quoted: ctx.msg }) }
     catch { return ctx.reply('❌ No pude convertir ese sticker.') }
   },
-  stickerinfo: async ctx => ctx.reply('🎨 *COMANDOS DE STICKERS*\n• *.sticker* / *.s* → convierte imagen o video corto en sticker.\n• *.letr texto* → sticker de texto en MAYÚSCULAS, fondo blanco completo y letra fina.\n• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n• *.ske Nombre* → crea una copia nueva del sticker con SOLO ese nombre, sin autor. Si tenías la versión anterior en Favoritos, elimínala y guarda la nueva; WhatsApp no permite renombrar favoritos existentes desde el bot.\n• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n• *.toimg* → convierte un sticker en imagen.')
+  stickerinfo: async ctx => ctx.reply('🎨 *COMANDOS DE STICKERS*\n• *.sticker* / *.s* → convierte imagen o video corto en sticker.\n• *.letr texto* → sticker de texto en MAYÚSCULAS, fondo blanco completo y letra fina.\n• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n• *.ske Nombre* → crea una copia nueva del sticker con SOLO ese nombre, sin autor. Si tenías la versión anterior en Favoritos, elimínala y guarda la nueva; WhatsApp no permite renombrar favoritos existentes desde el bot.\n• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n• *.toimg* → convierte un sticker en imagen.\n• *.sa* / *.stickeraudio* → sticker animado y nota de voz de un video con sonido (máx. 8 s).')
 }
