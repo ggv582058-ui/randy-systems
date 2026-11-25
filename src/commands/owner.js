@@ -6,7 +6,7 @@ export const ownerCommands = {
       const { buffer, type } = await ctx.downloadQuotedOrCurrent()
       if (!type.includes('imageMessage')) return ctx.reply('📸 Envía una imagen con *.setppbot* o responde a una imagen con *.setppbot*.')
       await ctx.sock.updateProfilePicture(ctx.sock.user.id, buffer)
-      setMenuPicture(buffer)
+      setMenuPicture(ctx.sock, buffer)
       return ctx.reply('✅ Foto de perfil y menú de RANDY SYSTEMS actualizadas.')
     } catch (error) {
       console.error('setppbot error:', error)
