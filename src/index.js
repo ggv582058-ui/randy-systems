@@ -138,8 +138,8 @@ async function startBot() {
       if (pairingRestartInProgress) { runtime.connection = 'pairing_starting'; return }
       if (statusCode === 440) {
         runtime.connection = 'session_conflict'; currentSock = null
-        console.warn('Session conflict (440): backing off to allow the previous Render instance to terminate.')
-        scheduleReconnect('session conflict 440', Math.max(75000, config.reconnectDelayMs))
+        console.warn('Session conflict (440): stopping reconnect to avoid displacing the active connection.')
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
         return
       }
       if (loggedOut) { runtime.connection = 'logged_out'; console.log('❌ WhatsApp cerró la sesión. Vuelve a vincular el dispositivo.'); return }
@@ -158,8 +158,10 @@ async function shutdown(signal) {
   shuttingDown = true; runtime.connection = 'stopping'; console.log(`\n🛑 ${signal} recibido. Cerrando ${config.botName}...`)
   if (reconnectTimer) clearTimeout(reconnectTimer)
   if (sessionBackupTimer) clearInterval(sessionBackupTimer)
-  if (runtime.lastDisconnectCode !== 440) await sessionStore.backup().catch(() => {}); await sessionStore.close().catch(() => {})
+  setTimeout(() => process.exit(0), 5000).unref()
   try { await currentSock?.end?.(new Error(`Process shutdown: ${signal}`)) } catch {}
+  if (runtime.lastDisconnectCode !== 440) await sessionStore.backup().catch(() => {})
+  await sessionStore.close().catch(() => {})
   healthServer.close(() => { runtime.connection = 'stopped'; process.exit(0) })
   setTimeout(() => process.exit(0), 5000).unref()
 }
