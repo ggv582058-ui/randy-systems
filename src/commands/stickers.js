@@ -15,7 +15,7 @@ async function imageToWebp(buffer) {
     .toBuffer()
 }
 
-async function videoToWebp(buffer) {
+async function videoToWebp(buffer, compact = false) {
   const id = randomBytes(6).toString('hex')
   const input = path.join(os.tmpdir(), `randy-${id}.mp4`)
   const output = path.join(os.tmpdir(), `randy-${id}.webp`)
@@ -24,9 +24,10 @@ async function videoToWebp(buffer) {
     await fs.writeFile(input, buffer)
     await new Promise((resolve, reject) => {
       const args = [
-        '-y', '-i', input,
-        '-t', '8',
-        '-vf', 'fps=12,scale=512:512:force_original_aspect_ratio=increase:flags=lanczos,crop=512:512',
+        '-nostdin', '-y', '-threads', '1', '-i', input,
+        '-filter_threads', '1', '-t', '8',
+        '-vf', (compact ? 'fps=9' : 'fps=12') + ',scale=512:512:force_original_aspect_ratio=increase:flags=lanczos,crop=512:512',
+        ...(compact ? ['-quality', '45', '-compression_level', '4'] : []),
         '-loop', '0',
         '-an',
         '-vsync', '0',
@@ -34,9 +35,10 @@ async function videoToWebp(buffer) {
       ]
       const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] })
       let stderr = ''
-      proc.stderr.on('data', chunk => { stderr += String(chunk).slice(-4000) })
-      proc.on('error', reject)
-      proc.on('close', code => code === 0 ? resolve() : reject(new Error(`ffmpeg ${code}: ${stderr.slice(-800)}`)))
+      const timer = setTimeout(() => proc.kill('SIGKILL'), 30000)
+      proc.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-4000) })
+      proc.once('error', error => { clearTimeout(timer); reject(error) })
+      proc.once('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`ffmpeg ${code}: ${stderr.slice(-800)}`)) })
     })
     return await fs.readFile(output)
   } finally {
@@ -258,7 +260,8 @@ async function stickerWithAudio(ctx) {
     if (type !== 'videoMessage') return ctx.reply('🎵 Responde a un video con sonido de hasta 8 segundos usando *.sa*. Recibirás el sticker animado y su audio por separado.')
     if (Number(content?.seconds || 0) > 8 || buffer.length > 8 * 1024 * 1024) return ctx.reply('❌ Usa un video de máximo 8 segundos y 8 MB.')
     const audio = await extractStickerAudio(buffer)
-    const sticker = await videoToWebp(buffer)
+    const sticker = await videoToWebp(buffer, true)
+    if (sticker.length > 500 * 1024) return ctx.reply('❌ El sticker es demasiado pesado. Usa un video más corto o con menos movimiento.')
     await ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
     return await ctx.sock.sendMessage(ctx.jid, { audio, mimetype: 'audio/ogg; codecs=opus', ptt: true }, { quoted: ctx.msg })
   } catch (error) {
