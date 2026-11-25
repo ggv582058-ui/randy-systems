@@ -16,7 +16,7 @@ const labels = { stickers: '🎨  STICKER STUDIO', descargas: '🎧  MEDIA CENTE
 export function mainMenu(profile = {}) {
   const { time, date } = timeAndDate()
   const p = config.prefix
-  return ['👑 *𝗥𝗔𝗡𝗗𝗬 𝗦𝗬𝗦𝗧𝗘𝗠𝗦*', 'ᴘʀᴇᴍɪᴜᴍ ʙᴏᴛ • ᴡʜᴀᴛsᴀᴘᴘ', '━━━━━━━━━━━━━━━━', '💠 *PANEL DE USUARIO*', 'Nombre: ' + (profile.name || 'Usuario'), 'Rango: ' + (profile.isOwner ? 'Owner' : profile.isAdmin ? 'Administrador' : 'Usuario'), 'Fecha: ' + date + ' • ' + time, 'Prefijo: ' + p, '━━━━━━━━━━━━━━━━', ...Object.keys(categories).map(k => '*' + labels[k] + '*\n' + p + 'menu ' + k + '  ·  ' + categories[k].length + ' comandos'), '━━━━━━━━━━━━━━━━', '📚 ' + p + 'menu todos', '🔊 ' + p + 'guiasonido', '© RANDY SYSTEMS 2026'].join('\n\n')
+  return ['♛ *𝗥𝗔𝗡𝗗𝗬 𝗦𝗬𝗦𝗧𝗘𝗠𝗦*', '✦ ᴘʀᴇᴍɪᴜᴍ ᴇᴅɪᴛɪᴏɴ ✦', '👑 *Owner:* Randy • @randy_zt', '━━━━━━━━━━━━━━━━', '◈ *𝗣𝗘𝗥𝗙𝗜𝗟 𝗗𝗜𝗚𝗜𝗧𝗔𝗟*', 'Nombre: ' + (profile.name || 'Usuario'), 'Rango: ' + (profile.isOwner ? 'Owner' : profile.isAdmin ? 'Administrador' : 'Usuario'), 'Fecha: ' + date + ' • ' + time, 'Prefijo: ' + p, '━━━━━━━━━━━━━━━━', ...Object.keys(categories).map((k,i) => '╭─ ' + String(i+1).padStart(2,'0') + ' · *' + labels[k] + '*\n╰─ › ' + p + 'menu ' + k + '  ·  ' + categories[k].length + ' comandos'), '━━━━━━━━━━━━━━━━', '📚 ' + p + 'menu todos', '🔊 ' + p + 'guiasonido', '✦ ᴅᴇsɪɢɴᴇᴅ ʙʏ ʀᴀɴᴅʏ\n© RANDY SYSTEMS 2026'].join('\n\n')
 }
 export function categoryMenu(name) {
   const key = name?.toLowerCase()
