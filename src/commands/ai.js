@@ -4,16 +4,18 @@ import { config } from '../config.js'
 
 function client() {
   if (!config.openaiKey) return null
-  return new OpenAI({ apiKey: config.openaiKey })
+  return new OpenAI({ apiKey: config.openaiKey, timeout: 25000, maxRetries: 0 })
 }
 
-async function ask(prompt, system = 'Responde en español, claro y breve.') {
+async function ask(prompt, system = 'Eres el asistente RANDY SYSTEMS. Responde en el idioma del usuario, de forma útil, clara y concisa. Si no sabes algo, dilo; no inventes datos ni afirmes haber realizado acciones externas.') {
   const c = client()
   if (!c) return null
   const response = await c.responses.create({
     model: config.openaiModel,
     instructions: system,
-    input: prompt
+    input: prompt,
+    max_output_tokens: 1800,
+    store: false
   })
   return response.output_text || 'Sin respuesta.'
 }
@@ -83,19 +85,37 @@ async function translateWithoutKey(targetLanguage, text) {
   return translated
 }
 
-export const aiCommands = {
-  ia: async ctx => {
+let activeQuestions = 0
+const lastQuestion = new Map()
+async function generalQuestion(ctx) {
     if (!ctx.argText) return ctx.reply('Uso: .ia ¿qué quieres preguntar?')
-    await ctx.react('🤖').catch(() => {})
+    if (ctx.argText.length > 4000) return ctx.reply('❌ La pregunta debe tener máximo 4000 caracteres.')
+    if (!config.openaiKey) return ctx.reply('⚠️ La IA requiere que el administrador configure OPENAI_API_KEY en Render.')
+    const key = String(ctx.sender || ctx.senderNumber || ctx.jid)
+    const now = Date.now()
+    if (now - (lastQuestion.get(key) || 0) < 5000) return ctx.reply('⏳ Espera unos segundos antes de otra consulta.')
+    if (activeQuestions >= 3) return ctx.reply('⏳ La IA está atendiendo otras consultas. Intenta de nuevo.')
+    if (lastQuestion.size >= 1000) lastQuestion.delete(lastQuestion.keys().next().value)
+    lastQuestion.set(key, now)
+    activeQuestions++
     try {
+      await ctx.react('🤖').catch(() => {})
       const answer = await ask(ctx.argText)
       if (answer) return ctx.reply(answer)
       return ctx.reply('⚠️ *.ia* necesita una OPENAI_API_KEY configurada en Render. *.resumir* y *.traducir* ya funcionan sin esa clave.')
     } catch (error) {
-      console.error('AI command error:', error)
-      return ctx.reply('❌ La IA no pudo responder ahora. Revisa la configuración de OPENAI_API_KEY.')
+      console.error('AI command error:', error?.status || error?.code || 'unknown')
+      return ctx.reply('❌ La IA no pudo responder ahora. Intenta de nuevo; si persiste, el administrador debe revisar la API.')
+    } finally {
+      activeQuestions--
     }
-  },
+}
+
+export const aiCommands = {
+  ia: generalQuestion,
+  ai: generalQuestion,
+  pregunta: generalQuestion,
+  chatgpt: generalQuestion,
 
   resumir: async ctx => {
     if (!ctx.argText) return ctx.reply('Uso: .resumir texto')
