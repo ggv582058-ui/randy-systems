@@ -31,7 +31,7 @@ await assertSessionDirWritable()
 const sessionStore = await createSessionStore({ redisUrl: config.redisUrl, key: config.sessionBackupKey, sessionDir: config.sessionDir, encryptionKey: config.sessionEncryptionKey, logger: console })
 await sessionStore.restore().catch(error => console.error('Session restore failed:', error))
 if (sessionStore.enabled) {
-  sessionBackupTimer = setInterval(() => { sessionStore.backup().catch(error => console.error('Session backup failed:', error)) }, config.sessionBackupIntervalMs)
+  sessionBackupTimer = setInterval(() => { if (runtime.lastDisconnectCode === 440 || shuttingDown) return; sessionStore.backup().catch(error => console.error('Session backup failed:', error)) }, config.sessionBackupIntervalMs)
   sessionBackupTimer.unref?.()
   console.log('💾 Persistent session backup: enabled')
 }
@@ -51,6 +51,7 @@ app.get('/ready', (_, res) => { const ready = runtime.connection === 'open'; res
 app.post('/api/pair', async (req, res) => {
   if (!setupAuthorized(req)) return res.status(401).json({ error: 'Acceso no autorizado.' })
   if (runtime.connection === 'open' || currentSock?.user?.id) return res.status(409).json({ error: 'El bot ya está vinculado. Cierra la sesión actual antes de vincular otro número.' })
+  if (runtime.lastDisconnectCode === 440) return res.status(409).json({ error: 'La sesión está recuperándose de un conflicto. No vuelvas a vincularla todavía.' })
   const phone = String(req.body?.phone || '').replace(/\D/g, '')
   if (phone.length < 8 || phone.length > 15) return res.status(400).json({ error: 'Escribe el número completo con código de país.' })
   const elapsed = runtime.pairingRequestedAt ? Date.now() - new Date(runtime.pairingRequestedAt).getTime() : Infinity
@@ -78,11 +79,11 @@ app.post('/api/pair', async (req, res) => {
 })
 const healthServer = app.listen(config.port, config.host, () => { console.log(`🩺 Health server: http://${config.host}:${config.port}/health`); console.log(`💾 Session directory: ${config.sessionDir}`) })
 
-function scheduleReconnect(reason = 'connection closed') {
+function scheduleReconnect(reason = 'connection closed', delayMs = config.reconnectDelayMs) {
   if (shuttingDown || pairingRestartInProgress || reconnectTimer) return
   runtime.connection = 'reconnecting'; runtime.reconnectAttempts += 1
-  console.log(`🔄 Reconectando en ${config.reconnectDelayMs} ms (${reason})`)
-  reconnectTimer = setTimeout(async () => { reconnectTimer = null; try { await startBot() } catch (error) { console.error('Reconnect failed:', error); scheduleReconnect('startup failure') } }, config.reconnectDelayMs)
+  console.log(`🔄 Reconectando en ${delayMs} ms (${reason})`)
+  reconnectTimer = setTimeout(async () => { reconnectTimer = null; try { await startBot() } catch (error) { console.error('Reconnect failed:', error); scheduleReconnect('startup failure') } }, delayMs)
 }
 
 async function handleIncomingMessage(sock, msg) {
@@ -122,12 +123,18 @@ async function startBot() {
       console.log(`⚠️ Conexión cerrada. Código: ${statusCode || 'desconocido'}`)
       if (shuttingDown) { runtime.connection = 'stopped'; return }
       if (pairingRestartInProgress) { runtime.connection = 'pairing_starting'; return }
+      if (statusCode === 440) {
+        runtime.connection = 'session_conflict'; currentSock = null
+        console.warn('Session conflict (440): backing off to allow the previous Render instance to terminate.')
+        scheduleReconnect('session conflict 440', Math.max(75000, config.reconnectDelayMs))
+        return
+      }
       if (loggedOut) { runtime.connection = 'logged_out'; console.log('❌ WhatsApp cerró la sesión. Vuelve a vincular el dispositivo.'); return }
       scheduleReconnect(`disconnect code ${statusCode || 'unknown'}`)
     }
   })
   sock.ev.on('messages.upsert', ({ messages, type }) => {
-    if (type !== 'notify') return
+    if (type !== 'notify' || sock !== currentSock || shuttingDown) return
     for (const msg of messages) void handleIncomingMessage(sock, msg)
   })
   return sock
@@ -138,7 +145,7 @@ async function shutdown(signal) {
   shuttingDown = true; runtime.connection = 'stopping'; console.log(`\n🛑 ${signal} recibido. Cerrando ${config.botName}...`)
   if (reconnectTimer) clearTimeout(reconnectTimer)
   if (sessionBackupTimer) clearInterval(sessionBackupTimer)
-  await sessionStore.backup().catch(() => {}); await sessionStore.close().catch(() => {})
+  if (runtime.lastDisconnectCode !== 440) await sessionStore.backup().catch(() => {}); await sessionStore.close().catch(() => {})
   try { await currentSock?.end?.(new Error(`Process shutdown: ${signal}`)) } catch {}
   healthServer.close(() => { runtime.connection = 'stopped'; process.exit(0) })
   setTimeout(() => process.exit(0), 5000).unref()
