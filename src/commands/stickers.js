@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { randomBytes } from 'node:crypto'
 import { makeStickerPackId } from '../lib/sticker-identity.js'
 import { spawn } from 'node:child_process'
 import ffmpegPath from 'ffmpeg-static'
@@ -15,35 +14,53 @@ async function imageToWebp(buffer) {
     .toBuffer()
 }
 
-async function videoToWebp(buffer, compact = false) {
-  const id = randomBytes(6).toString('hex')
-  const input = path.join(os.tmpdir(), `randy-${id}.mp4`)
-  const output = path.join(os.tmpdir(), `randy-${id}.webp`)
+let videoConversionBusy = false
 
+async function videoToWebp(buffer, compact = false) {
+  if (videoConversionBusy) throw new Error('Otra conversión de video está en proceso.')
+  videoConversionBusy = true
+  let dir
   try {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'randy-webp-'))
+    const input = path.join(dir, 'input.mp4')
+    const output = path.join(dir, 'output.webp')
     await fs.writeFile(input, buffer)
-    await new Promise((resolve, reject) => {
-      const args = [
-        '-nostdin', '-y', '-threads', '1', '-i', input,
-        '-filter_threads', '1', '-t', '8',
-        '-vf', (compact ? 'fps=9' : 'fps=12') + ',scale=512:512:force_original_aspect_ratio=increase:flags=lanczos,crop=512:512',
-        ...(compact ? ['-quality', '45', '-compression_level', '4'] : []),
-        '-loop', '0',
-        '-an',
-        '-vsync', '0',
-        output
-      ]
-      const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] })
-      let stderr = ''
-      const timer = setTimeout(() => proc.kill('SIGKILL'), 30000)
-      proc.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-4000) })
-      proc.once('error', error => { clearTimeout(timer); reject(error) })
-      proc.once('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`ffmpeg ${code}: ${stderr.slice(-800)}`)) })
-    })
-    return await fs.readFile(output)
+    // Keep the canvas 512x512; reduce frame rate, effective resolution and
+    // quality progressively instead of rejecting an oversized first encode.
+    const profiles = compact
+      ? [[10, 384, 48], [8, 320, 36], [6, 256, 25], [4, 192, 12], [2, 128, 8]]
+      : [[12, 512, 65], [8, 320, 36], [6, 256, 25], [4, 192, 12], [2, 128, 8]]
+    const deadline = Date.now() + 35000
+    for (const [fps, size, quality] of profiles) {
+      const remaining = deadline - Date.now()
+      if (remaining < 1000) break
+      await new Promise((resolve, reject) => {
+        const args = [
+          '-nostdin', '-y', '-threads', '1', '-i', input,
+          '-filter_threads', '1', '-t', '8',
+          '-vf', 'fps=' + fps + ',scale=' + size + ':' + size + ':force_original_aspect_ratio=increase:flags=bilinear,crop=' + size + ':' + size + ',scale=512:512:flags=neighbor',
+          '-c:v', 'libwebp_anim', '-threads', '1', '-quality', String(quality), '-compression_level', '3',
+          '-loop', '0', '-an', '-vsync', '0', output
+        ]
+        const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+        let stderr = ''
+        const timer = setTimeout(() => proc.kill('SIGKILL'), remaining)
+        proc.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-4000) })
+        proc.once('error', error => { clearTimeout(timer); reject(error) })
+        proc.once('close', code => {
+          clearTimeout(timer)
+          if (code === 0) resolve()
+          else reject(new Error('ffmpeg ' + code + ': ' + stderr.slice(-500)))
+        })
+      })
+      const stat = await fs.stat(output)
+      console.log('Sticker compression:', { fps, size, quality, bytes: stat.size })
+      if (stat.size > 0 && stat.size <= 490000) return await fs.readFile(output)
+    }
+    throw new Error('STICKER_SIZE_LIMIT')
   } finally {
-    await fs.rm(input, { force: true }).catch(() => {})
-    await fs.rm(output, { force: true }).catch(() => {})
+    if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+    videoConversionBusy = false
   }
 }
 
@@ -261,12 +278,11 @@ async function stickerWithAudio(ctx) {
     if (Number(content?.seconds || 0) > 8 || buffer.length > 8 * 1024 * 1024) return ctx.reply('❌ Usa un video de máximo 8 segundos y 8 MB.')
     const audio = await extractStickerAudio(buffer)
     const sticker = await videoToWebp(buffer, true)
-    if (sticker.length > 500 * 1024) return ctx.reply('❌ El sticker es demasiado pesado. Usa un video más corto o con menos movimiento.')
     await ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
     return await ctx.sock.sendMessage(ctx.jid, { audio, mimetype: 'audio/ogg; codecs=opus', ptt: true }, { quoted: ctx.msg })
   } catch (error) {
     console.error('Audio sticker error:', String(error?.message || error).slice(0, 200))
-    return ctx.reply('❌ No pude crear el sticker con audio. Comprueba que el video tenga sonido y dure hasta 8 segundos.')
+    return ctx.reply(error?.message === 'STICKER_SIZE_LIMIT' ? '❌ No logré comprimir este video al límite de WhatsApp. Intenta con otro clip.' : '❌ No pude crear el sticker con audio. Comprueba que el video tenga sonido y dure hasta 8 segundos; si hay otra conversión, intenta después.')
   } finally {
     audioStickerBusy = false
   }
