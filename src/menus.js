@@ -2,21 +2,26 @@ import { config } from './config.js'
 import { timeAndDate } from './lib/utils.js'
 
 const categories = {
-  stickers: ['sticker', 's', 'sa', 'stickeraudio', 'cl', 'ske', 'letr', 'sck', 'cleansticker', 'swm', 'stickerwm', 'toimg', 'stickerinfo'],
+  stickers: ['sticker', 's', 'sa', 'stickeraudio', 'cl', 'ske', 'letr', 'sck', 'cleansticker', 'swm', 'stickerwm', 'toimg', 'stickerinfo', 'soundinfo', 'guiasonido'],
   descargas: ['play', 'ytplay', 'youtube.play', 'spotify', 'sp', 'ytmp3', 'yta', 'ytmp4', 'ytvideo', 'playvideo', 'youtube.video', 'tiktok', 'tt', 'tiktoknowm', 'ttnowm', 'instagram', 'ig', 'mediahelp', 'descargas'],
   grupos: ['admins', 'tagall', 'hidetag', 'kick', 'add', 'promote', 'demote', 'link', 'revoke', 'subject', 'desc', 'open', 'close', 'groupinfo'],
-  ia: ['ia', 'ai', 'pregunta', 'chatgpt', 'resumir', 'traducir'],
+  ia: ['ia', 'ai', 'pregunta', 'chatgpt', 'resumir', 'traducir', 'resetia'],
   herramientas: ['hora', 'fecha', 'calc', 'qr', 'id', 'jid', 'runtime', 'avatar', 'ver'],
   social: ['perfil', 'me', 'owner', 'grupo', 'saludar'],
   diversion: ['dado', 'moneda', '8ball', 'ship', 'rate', 'chiste', 'reto', 'verdad'],
   general: ['menu', 'ping', 'botinfo', 'ayuda', 'prefix', 'estado', 'uptime', 'comandos', 'setppbot']
 }
 
+const labels = { stickers: '🎨  STICKER STUDIO', descargas: '🎧  MEDIA CENTER', grupos: '🛡️  ADMINISTRACIÓN', ia: '🤖  INTELIGENCIA ARTIFICIAL', herramientas: '⚙️  UTILIDADES', social: '💎  SOCIAL', diversion: '🎮  ENTRETENIMIENTO', general: '📡  SISTEMA' }
 export function mainMenu(profile = {}) {
-  const { time, date } = timeAndDate(); const p = config.prefix
-  return `╭═════════════⊷\n╰╮き⃟❗️ɪɴғᴏ ᴅᴇʟ ʙᴏᴛ❗⃟ き\n╭┤⋟ Prefijo: 『 ${p} 』\n┃│⋟ Hora: ${time}\n┃│⋟ Fecha: ${date}\n┃│⋟ Nombre: *${config.botName}*\n┃│⋟ Grupo: ${config.groupLink || 'No configurado'}\n┃╰════════════⊷\n╰╦═════「★」════⊷\n╭┤き⃟👤 ɪɴғᴏ ᴘᴇʀғɪʟ 👤⃟ き\n┃╞════════════⊷\n┃┌━━━━── • ──━━━━\n┃│⋟ Nombre: ${profile.name || 'Usuario'}\n┃│⋟ User: @${profile.number || 'usuario'}\n┃│⋟ Rango: ${profile.isOwner ? 'Owner' : profile.isAdmin ? 'Administrador' : 'Usuario'}\n┃│⋟ Admin: ${profile.isAdmin ? '✅' : '❌'}\n┃╰━━━━── • ──━━━━\n╰╦═════「★」════⊷\n╭┤き⃟📜 ᴍᴇɴú ᴘᴏʀ ᴄᴀᴛᴇɢᴏʀíᴀs 📜⃟ き\n┃╰━━━━── • ──━━━━\n┃╭ ⋟ \`${p}menu stickers\` 🎨\n┃│  Crear, editar y hacer stickers con audio (.sa).\n┃│  ${categories.stickers.length} comandos\n┃╰━━━─── • ──━━━━\n┃╭ ⋟ \`${p}menu descargas\` 📥\n┃│  Música, videos y descargas de YouTube, Spotify, TikTok e Instagram.\n┃│  ${categories.descargas.length} comandos\n┃╰━━━─── • ──━━━━\n┃╭ ⋟ \`${p}menu grupos\` 👥\n┃│  Administración, seguridad y configuración de grupos.\n┃│  ${categories.grupos.length} comandos\n┃╰━━━─── • ──━━━━\n┃╭ ⋟ \`${p}menu ia\` 🤖\n┃│  Preguntas en cualquier idioma con .ia o .chatgpt.\n┃│  ${categories.ia.length} comandos\n┃╰━━━─── • ──━━━━\n┃╭ ⋟ \`${p}menu herramientas\` 🧰\n┃│  Consultas, información y utilidades prácticas.\n┃│  ${categories.herramientas.length} comandos\n┃╰━━━─── • ──━━━━\n┃╭ ⋟ \`${p}menu social\` 🎵\n┃│  Perfiles, actividad, relaciones y música.\n┃│  ${categories.social.length} comandos\n┃╰━━━─── • ──━━━━\n┃╭ ⋟ \`${p}menu diversion\` 🎭\n┃│  Juegos, reacciones, memes y entretenimiento.\n┃│  ${categories.diversion.length} comandos\n┃╰━━━─── • ──━━━━\n┃╭ ⋟ \`${p}menu general\` 👻\n┃│  Información y otros comandos del bot.\n┃│  ${categories.general.length} comandos\n┃╰━━━─── • ──━━━━\n┃╭ ⋟ \`${p}menu todos\` 📚\n┃│  Muestra todas las categorías.\n┃╰━━━─── • ──━━━━\n╰━━━━━── • ──━━━━`
+  const { time, date } = timeAndDate()
+  const p = config.prefix
+  return ['👑 *𝗥𝗔𝗡𝗗𝗬 𝗦𝗬𝗦𝗧𝗘𝗠𝗦*', 'ᴘʀᴇᴍɪᴜᴍ ʙᴏᴛ • ᴡʜᴀᴛsᴀᴘᴘ', '━━━━━━━━━━━━━━━━', '💠 *PANEL DE USUARIO*', 'Nombre: ' + (profile.name || 'Usuario'), 'Rango: ' + (profile.isOwner ? 'Owner' : profile.isAdmin ? 'Administrador' : 'Usuario'), 'Fecha: ' + date + ' • ' + time, 'Prefijo: ' + p, '━━━━━━━━━━━━━━━━', ...Object.keys(categories).map(k => '*' + labels[k] + '*\n' + p + 'menu ' + k + '  ·  ' + categories[k].length + ' comandos'), '━━━━━━━━━━━━━━━━', '📚 ' + p + 'menu todos', '🔊 ' + p + 'guiasonido', '© RANDY SYSTEMS 2026'].join('\n\n')
 }
-
-export function categoryMenu(name) { const key = name?.toLowerCase(); const list = categories[key]; if (!list) return null; const pretty = list.map(c => `┃ ⋟ ${config.prefix}${c}`).join('\n'); return `╭═════════════⊷\n╰╮  ${key.toUpperCase()}\n╭╯═════════════⊷\n${pretty}\n╰═════════════⊷` }
+export function categoryMenu(name) {
+  const key = name?.toLowerCase()
+  if (!Object.hasOwn(categories, key)) return null
+  return ['💎 *𝗥𝗔𝗡𝗗𝗬 𝗦𝗬𝗦𝗧𝗘𝗠𝗦*', '*' + labels[key] + '*', '━━━━━━━━━━━━━━━━', ...categories[key].map(c => '› ' + config.prefix + c), '━━━━━━━━━━━━━━━━', ...(key === 'stickers' ? ['Audio nativo: experimental. Usa ' + config.prefix + 'guiasonido para la guía.'] : []), '↩ ' + config.prefix + 'menu'].join('\n')
+}
 export function allCommandsMenu() { return Object.keys(categories).map(k => categoryMenu(k)).join('\n\n') }
 export { categories }
