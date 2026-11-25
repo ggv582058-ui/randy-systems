@@ -22,6 +22,16 @@ let shuttingDown = false
 let sessionBackupTimer = null
 let pairingBusy = false
 let pairingRestartInProgress = false
+const processedCommands = new Map()
+const commandDedupTTL = 10 * 60 * 1000
+function claimCommand(key) {
+  const now = Date.now()
+  for (const [id, expires] of processedCommands) { if (expires > now) break; processedCommands.delete(id) }
+  if (processedCommands.has(key)) return false
+  processedCommands.set(key, now + commandDedupTTL)
+  if (processedCommands.size > 5000) processedCommands.delete(processedCommands.keys().next().value)
+  return true
+}
 
 await fs.mkdir(config.sessionDir, { recursive: true })
 async function assertSessionDirWritable() { const probe = `${config.sessionDir}/.write-test-${process.pid}`; await fs.writeFile(probe, 'ok'); await fs.unlink(probe) }
@@ -95,12 +105,15 @@ async function handleIncomingMessage(sock, msg) {
     if (!parsed) return
     const handler = commands[parsed.command]
     if (!handler) return
+    if (sock !== currentSock || shuttingDown) return
+    const id = msg.key.id
+    if (id && !claimCommand(JSON.stringify([sock.user?.id, jid, msg.key.participant || '', id]))) return
     const ctx = await buildContext(sock, msg, parsed)
     await handler(ctx)
   } catch (error) {
     console.error('Command error:', error)
     const jid = msg?.key?.remoteJid
-    if (jid) await sock.sendMessage(jid, { text: '❌ Ocurrió un error ejecutando ese comando.' }, { quoted: msg }).catch(() => {})
+    if (jid && sock === currentSock && !shuttingDown) await sock.sendMessage(jid, { text: '❌ Ocurrió un error ejecutando ese comando.' }, { quoted: msg }).catch(() => {})
   }
 }
 
