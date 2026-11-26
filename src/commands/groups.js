@@ -39,7 +39,7 @@ async function removeNonAdmins(ctx) {
     if (!admin(bot)) return ctx.reply('❌ Necesito ser administrador del grupo.')
     const owner = await findGroupParticipant(ctx.sock, participants, [metadata.owner, metadata.ownerPn])
     const protectedIds = new Set(participants.filter(p => admin(p) || p === sender || p === bot || p === owner).map(p => normalizeWhatsAppJid(p.id)).filter(Boolean))
-    const targets = [...new Set(participants.filter(p => p?.id && !admin(p) && p !== sender && p !== bot && p !== owner && !protectedIds.has(normalizeWhatsAppJid(p.id)) && (p.admin == null || p.admin === false) && /@(lid|s\\.whatsapp\\.net)$/.test(p.id)).map(p => p.id))]
+    const targets = [...new Set(participants.filter(p => p?.id && !admin(p) && p !== sender && p !== bot && p !== owner && !protectedIds.has(normalizeWhatsAppJid(p.id)) && (p.admin == null || p.admin === false) && (p.id.endsWith('@lid') || p.id.endsWith('@s.whatsapp.net'))).map(p => p.id))]
     if (!targets.length) return ctx.reply('🛡️ No hay miembros sin administrador para expulsar.')
     const result = await ctx.sock.groupParticipantsUpdate(ctx.jid, targets, 'remove')
     const rows = Array.isArray(result) ? result : []
