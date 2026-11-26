@@ -80,8 +80,12 @@ def _components(data):
 
 def delivery_menu(order):
     order_id = int(order["id"])
-    return InlineKeyboardMarkup([[bot.emoji_button("Obtener certificado", "get_certificate",
-        callback_data=f"certapp:replay:{order_id}")]])
+    rows = [[bot.emoji_button("Obtener certificado", "get_certificate",
+        callback_data=f"certapp:replay:{order_id}")]]
+    base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    if base.startswith("https://") and order["install_token"]:
+        rows.append([InlineKeyboardButton("🌐 Mi certificado en la web", callback_data=f"certapp:web:{order_id}")])
+    return InlineKeyboardMarkup(rows)
 
 
 def app_menu(order, kind="gbox"):
@@ -127,10 +131,21 @@ async def send_files(tg_bot, order):
             except Exception:
                 log.warning("Logo inválido para %s", kind)
         documents.append(InputMediaDocument(stream, caption=bot.developer_text(caption), thumbnail=thumbnail))
+    package = io.BytesIO()
+    with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(f"{client_name}.p12", p12[1])
+        archive.writestr(f"{client_name}.mobileprovision", mobile[1])
+    package.seek(0)
+    package.name = f"{client_name}.zip"
+    documents.append(InputMediaDocument(package, caption=bot.developer_text(f"ZIP · {client_name} | P12 + Perfil")))
     await tg_bot.send_media_group(order["user_id"], documents)
     await tg_bot.send_message(order["user_id"],
-        f"Contraseña P12: <code>{html.escape(str(order['p12_password']))}</code>\n"
-        "Guarda estos dos archivos en privado.", parse_mode=ParseMode.HTML)
+        f"📦 <b>RANDY MOD / ENTREGA PRIVADA</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "✅ P12 + MobileProvision + paquete ZIP\n"
+        f"🔐 Contraseña P12: <code>{html.escape(str(order['p12_password']))}</code>\n"
+        "Guarda tus archivos y contraseña en privado. Puedes recuperar tu enlace web desde el bot.",
+        parse_mode=ParseMode.HTML, reply_markup=delivery_menu(order))
 
 
 async def send_app_choice(tg_bot, order, kind="gbox"):
@@ -159,6 +174,8 @@ def app_selector_menu(order, custom_icons=True):
         icon_custom_emoji_id=bot.certificate_emoji("gbox") if custom_icons else None,
         style="success" if custom_icons else None,
     )]]
+    if base.startswith("https://") and order["install_token"]:
+        rows.append([InlineKeyboardButton("🌐 Mi certificado en la web", callback_data=f"certapp:web:{order_id}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -225,6 +242,17 @@ async def certificate_callback(update, context):
         return
     order = bot.db.renew_certificate_link(order_id, query.from_user.id, bot.settings.certificate_link_ttl_hours)
     base = os.getenv("RENDER_EXTERNAL_URL", os.getenv("WEBHOOK_BASE_URL", "")).rstrip("/")
+    if action == "web":
+        if not base.startswith("https://"):
+            await query.answer("Enlace privado no disponible", show_alert=True)
+            return
+        await query.answer()
+        await query.message.reply_text("🔐 <b>RANDY MOD / ACCESO PRIVADO</b>\nAbre tu certificado, descarga tus archivos o instala GBox. No compartas tu enlace.",
+            parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🌐 Abrir mi certificado", url=f"{base}/certificate/install/{order['install_token']}")],
+                [InlineKeyboardButton("📦 Descargar ZIP", url=f"{base}/certificate/download/{order['install_token']}")],
+            ]))
+        return
     if action.startswith("sign_") and action[5:] in APPS:
         kind = action[5:]
         key = (order_id, kind)
