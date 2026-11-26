@@ -11,6 +11,7 @@ import plistlib
 import threading
 import zipfile
 from datetime import datetime, timezone
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
@@ -32,7 +33,7 @@ main{position:relative;max-width:460px;margin:auto;padding:23px 20px calc(26px +
 .brand-art{position:relative;width:100%;aspect-ratio:1.8;overflow:hidden;border-radius:22px;border:1px solid #51a9ff60;background:#06162d;box-shadow:0 15px 55px #006eff16}.brand-art img{width:100%;height:100%;object-fit:cover;object-position:50% 39%;animation:art-drift 12s ease-in-out infinite alternate}.brand-art:after{content:'';position:absolute;inset:0;background:linear-gradient(0deg,#03132988,transparent 40%);pointer-events:none}.art-caption{position:absolute;z-index:1;left:15px;bottom:13px;color:#b1d9ff;font:9px ui-monospace,monospace;letter-spacing:2px}@keyframes art-drift{to{transform:scale(1.045)}}
 .app-panel{position:relative;margin:18px 0 16px;padding:25px 21px 23px;border:1px solid #438bd342;border-radius:24px;background:linear-gradient(135deg,#122c4bba,#071328e8);box-shadow:inset 0 1px 0 #c4e5ff14,0 24px 55px #0005;backdrop-filter:blur(18px)}.panel-label{display:flex;justify-content:space-between;align-items:center;color:#699ac9;font:9px ui-monospace,monospace;letter-spacing:1.3px}.panel-label b{color:#8fccff;font-weight:500}.orb{position:relative;margin:24px auto 15px;width:90px;height:90px;padding:6px;border-radius:25px;background:linear-gradient(140deg,#2e83d5,#0b2853);box-shadow:0 0 0 7px #409aff0c,0 14px 42px #1384ff29}.orb:after{content:'';position:absolute;inset:-12px;border:1px solid #64b6ff25;border-radius:33px}.orb img{width:100%;height:100%;object-fit:cover;border-radius:20px}.orb .fallback{display:grid;place-items:center;height:100%;font-size:30px;font-weight:800;color:white}
 h1{font-size:32px;letter-spacing:-1px;margin:10px 0 5px}.version{font-size:12px;color:#90b4d7}.badge{display:inline-flex;align-items:center;gap:6px;margin:15px 0 3px;font:9px ui-monospace,monospace;letter-spacing:1px;color:#91d2ff}.badge:before{content:'●';font-size:8px;color:#5ac5ff}.hint{font-size:13px;line-height:1.65;color:#97b2cf;margin:14px 0 18px}.install,.button{position:relative;display:flex;align-items:center;justify-content:center;gap:10px;min-height:56px;width:100%;border:1px solid #76bdff70;border-radius:15px;background:linear-gradient(110deg,#136bdf,#2199f3);box-shadow:0 9px 28px #087af331,inset 0 1px 0 #bce9ff35;color:#fff;font:750 16px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-decoration:none;cursor:pointer;transition:transform .2s,filter .2s}.install:hover,.button:hover{filter:brightness(1.1)}.install:active,.button:active{transform:scale(.98)}.install span{position:absolute;right:18px}.install:focus-visible,.button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid #b5e5ff;outline-offset:4px}.waiting{padding:16px;background:#102a47;border:1px solid #6d9ac849;border-radius:14px;line-height:1.6;color:#bfdbf7}.workflow{display:flex;justify-content:center;gap:18px;color:#6890b6;font:9px ui-monospace,monospace;margin-top:19px}.workflow span:first-child{color:#afd9ff}.workflow b{color:#389eff;font-weight:500;margin-right:4px}
-.video-guide{margin:16px 0;padding:15px;border:1px solid #377abd35;border-radius:18px;background:#0a1a2db8;text-align:left}.video-guide summary{cursor:pointer;list-style:none;font-size:12px;font-weight:700;color:#c7e3ff;display:flex;justify-content:space-between}.video-guide summary:after{content:'+';color:#63b5ff}.video-guide[open] summary:after{content:'−'}video{display:block;margin-top:14px;width:100%;max-height:220px;border-radius:12px;background:#06142a}.web{display:block;color:#81baf0;font-size:12px;text-decoration:none;margin:20px 0}.foot{color:#537899;font:9px/1.8 ui-monospace,monospace;letter-spacing:1px;margin-top:18px}.note{padding:15px 16px;border:1px solid #438bd334;border-radius:16px;background:#0a1a2dcc;text-align:left;color:#97b2cf;font-size:12px;line-height:1.7}.secondary{color:#6e92b5;font-size:11px;line-height:1.7}.button{margin:14px 0}#installed{background:#10345b;color:#b8ddff;border-color:#427bae80;box-shadow:none}#open-app.button{background:linear-gradient(110deg,#0c72e6,#36afff)}[hidden]{display:none!important}
+.video-guide{margin:16px 0;padding:15px;border:1px solid #377abd35;border-radius:18px;background:#0a1a2db8;text-align:left}.video-guide summary{cursor:pointer;list-style:none;font-size:12px;font-weight:700;color:#c7e3ff;display:flex;justify-content:space-between}.video-guide summary:after{content:'+';color:#63b5ff}.video-guide[open] summary:after{content:'−'}video{display:block;margin-top:14px;width:100%;max-height:220px;border-radius:12px;background:#06142a}.web{display:block;color:#d7eaff;font-size:13px;font-weight:700;text-decoration:none;margin:12px 0;padding:15px;border:1px solid #5599de66;border-radius:16px;background:linear-gradient(135deg,#142c47,#08172a)}.download-card{display:flex;align-items:center;gap:13px;text-align:left;border:1px solid #489aff70;border-radius:18px;padding:16px;color:#fff;text-decoration:none;background:linear-gradient(135deg,#163b64,#0a192e);box-shadow:inset 0 1px 0 #fff2,0 12px 30px #0004}.download-card span{font-size:23px}.download-card b,.download-card small{display:block}.download-card small{color:#a1c1df;margin-top:5px;font-size:11px}.download-card i{margin-left:auto;font-style:normal;color:#8cceff}.orb{animation:orb-float 4s ease-in-out infinite}@keyframes orb-float{50%{transform:translateY(-4px)}}@media(prefers-reduced-motion:reduce){.orb{animation:none}}.foot{color:#537899;font:9px/1.8 ui-monospace,monospace;letter-spacing:1px;margin-top:18px}.note{padding:15px 16px;border:1px solid #438bd334;border-radius:16px;background:#0a1a2dcc;text-align:left;color:#97b2cf;font-size:12px;line-height:1.7}.secondary{color:#6e92b5;font-size:11px;line-height:1.7}.button{margin:14px 0}#installed{background:#10345b;color:#b8ddff;border-color:#427bae80;box-shadow:none}#open-app.button{background:linear-gradient(110deg,#0c72e6,#36afff)}[hidden]{display:none!important}
 @media(prefers-reduced-motion:reduce){.code-rain span,.brand-art img{animation:none}.install,.button{transition:none}}@media(max-width:350px){main{padding-left:14px;padding-right:14px}.app-panel{padding:22px 16px}.secure{font-size:8px}.brand{font-size:13px}}
 """
 
@@ -219,7 +220,8 @@ class HealthHandler(BaseHTTPRequestHandler):
 <p class="hint">Instala {name} con tu certificado y abre la app cuando iOS termine.</p>
 {main_button}<div class="workflow" aria-label="Pasos de instalación"><span><b>01</b> INSTALAR</span><span><b>02</b> CONFIRMAR</span><span><b>03</b> ABRIR</span></div></section>
 <details class="video-guide"><summary>Guía rápida de instalación</summary><video controls playsinline preload="none" poster="/certificate/cover/{safe_token}"><source src="/certificate/tutorial" type="video/mp4">Tu navegador no admite video.</video><p class="secondary">Después de instalar, importa tus archivos P12 y MobileProvision en {name} con la contraseña que recibiste en Telegram.</p></details>
-<a class="web" href="/certificate/install/{safe_token}?app={kind}">Ver mi certificado y archivos ↗</a>
+<a class="download-card" href="/certificate/download/{safe_token}"><span>📦</span><div><b>Descargar paquete ZIP</b><small>P12 + MobileProvision · 2 archivos</small></div><i>↓</i></a>
+<a class="web" href="/certificate/install/{safe_token}?app={kind}">Mi certificado · acceso privado ↗</a>
 <div class="foot">RANDY MOD © 2026 · PRIVATE ACCESS</div>
 </main><script>
 const app=window.Telegram?.WebApp;app?.ready();app?.expand();
@@ -229,6 +231,7 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "private, no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'self' https://telegram.org data:; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://telegram.org; img-src 'self' data:; media-src 'self'")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -262,6 +265,7 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "private, no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'self' data:; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -294,8 +298,7 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
         plan = html.escape(f"Plan #{order['plan_id']}")
         install_actions = ""
         if ready and server.certificate_signed_lookup:
-            for kind, label in sorted((("gbox", "GBox"), ("esign", "ESign")),
-                                      key=lambda item: item[0] != focus):
+            for kind, label in (("gbox", "GBox"),):
                 if server.certificate_signed_lookup(order["id"], kind):
                     # URLs from Render's configured public host cannot be replaced
                     # by an untrusted Host header.
@@ -309,17 +312,16 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
                                             f'<div><b>Instalar {label}</b><small>Toca aquí desde Safari</small></div><i>↗</i></a>')
 
         actions = (f"""
-          <div class="section-title">ARCHIVOS DEL CERTIFICADO</div>
+          <div class="section-title">01 / ENTREGA DIGITAL</div>
+          <a class="action zip-action" href="/certificate/download/{token_safe}"><span>📦</span><div><b>Descargar paquete ZIP</b><small>P12 + MobileProvision · 2 archivos</small></div><i>↓</i></a>
           <button class="action share-file" data-kind="p12"><span><img class="file-logo" src="/certificate/logo/{token_safe}/p12" alt="" onerror="this.replaceWith(document.createTextNode('🔐'))"></span><div><b>Compartir P12</b><small>Abrir con tu firmador</small></div><i>›</i></button>
           <button class="action share-file" data-kind="mobileprovision"><span><img class="file-logo" src="/certificate/logo/{token_safe}/mobileprovision" alt="" onerror="this.replaceWith(document.createTextNode('📲'))"></span><div><b>Compartir MobileProvision</b><small>Perfil de aprovisionamiento</small></div><i>›</i></button>
-          <a class="action" href="/certificate/download/{token_safe}"><span>📦</span><div><b>Descargar paquete ZIP</b><small>P12 + MobileProvision</small></div><i>↓</i></a>
           <button id="copy-password" class="action"><span>🔑</span><div><b>Copiar contraseña</b><small>Contraseña del archivo P12</small></div><i>⧉</i></button>
           <div class="section-title">IMPORTAR CERTIFICADO EN</div>
           <div class="apps">
             <button class="mini share-file" data-kind="p12"><img class="app-logo" src="/certificate/logo/{token_safe}/gbox" alt="" onerror="this.style.display='none'"><b>GBox · Importar P12</b></button>
-            <button class="mini share-file" data-kind="p12"><img class="app-logo" src="/certificate/logo/{token_safe}/esign" alt="" onerror="this.style.display='none'"><b>ESign · Importar P12</b></button>
           </div>
-          <div class="source-links"><a href="https://cdn.gbox.run/d/apps/GBox_v6.1.2.ipa" rel="noopener noreferrer" target="_blank">Descargar IPA GBox · requiere firma ↗</a><a href="https://github.com/qbap/Esign-IPA-Installer" rel="noopener noreferrer" target="_blank">Guía y descarga ESign ↗</a></div>
+          <div class="source-links"><a href="https://cdn.gbox.run/d/apps/GBox_v6.1.2.ipa" rel="noopener noreferrer" target="_blank">Descargar IPA GBox · requiere firma ↗</a></div>
         """ if ready else """
           <div class="waiting"><div class="loader"></div><div><b>Preparando certificado</b><small>Tiempo transcurrido: <span id="wait-time">consultando…</span></small><small>Espera unos minutos. Te avisaré en Telegram; la revisión depende del proveedor.</small></div></div>
         """)
@@ -366,12 +368,13 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
         .apps{{display:grid;grid-template-columns:repeat(2,1fr);gap:9px}}.mini{{border:1px solid #72b9ff31;border-radius:18px;padding:14px 11px;background:#0a1b35b8;color:white;font-size:18px;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:inset 0 1px 0 #fff0d}}.mini b{{font-size:13px}}.app-logo,.file-logo{{width:28px;height:28px;object-fit:cover;border-radius:8px;flex:none}}.install-action{{padding:18px 14px;border-color:#73e1ffa0;background:linear-gradient(110deg,#1260cb,#197bd8);box-shadow:0 12px 32px #1267db55}}.install-action b{{font-size:18px}}.install-action .app-logo{{width:35px;height:35px}}.source-links{{display:flex;flex-wrap:wrap;gap:10px;margin:13px 2px 0}}.source-links a{{color:#8dcaff;font-size:12px;text-decoration:none;font-weight:750}}.source-links a:hover{{text-decoration:underline}}
         .waiting{{margin-top:20px;display:flex;align-items:center;gap:14px;padding:18px;border-radius:20px;background:#0b213fbb;border:1px solid #4ca7ff3d}}.waiting small{{display:block;color:#8db1d9;margin-top:4px}}.loader{{width:28px;height:28px;border-radius:50%;border:3px solid #1687ff33;border-top-color:#56b3ff;animation:spin .8s linear infinite}}@keyframes spin{{to{{transform:rotate(360deg)}}}}
         .music-pill{{position:fixed;z-index:8;right:15px;bottom:calc(16px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:8px;padding:10px 13px;border:1px solid #8dccff4a;border-radius:999px;background:#071a31c7;color:#cfeaff;backdrop-filter:blur(18px);box-shadow:0 12px 30px #0008;font-size:12px;font-weight:800}}.music-dot{{width:8px;height:8px;border-radius:50%;background:#36a3ff;box-shadow:0 0 12px #36a3ff;animation:pulse 1.2s ease-in-out infinite alternate}}@keyframes pulse{{to{{opacity:.3;transform:scale(.65)}}}}
+        .zip-action{{padding:18px 14px;border-color:#71bdff91;background:linear-gradient(130deg,#164e90,#102a50);box-shadow:0 12px 28px #006bff24,inset 0 1px 0 #c7e8ff26}}.zip-action b{{font-size:17px}}.zip-action small{{color:#bddcff}}.apps{{grid-template-columns:1fr}}.action{{transition:transform .2s,filter .2s}}.action:hover{{filter:brightness(1.08)}}@media(prefers-reduced-motion:reduce){{body:before,body:after,.music-dot{{animation:none}}.action{{transition:none}}}}
         .foot{{margin:18px 5px 0;color:#6388b2;font-size:11px;line-height:1.5;text-align:center}}@media(min-width:500px){{.grid{{grid-template-columns:1fr 1fr}}}}
         </style></head>
         <body><main><section class="glass"><div class="brand">RANDY SYSTEMS · ENTREGA PRIVADA</div>
         <div class="hero" style="background-image:linear-gradient(0deg,#031025ed,#06152a55),url('/certificate/cover/{token_safe}');background-position:center;background-size:cover;min-height:220px;display:flex;flex-direction:column;justify-content:flex-end"><div class="eyebrow">CERTIFICADO DIGITAL</div><h1>{name}</h1><div class="signed">✓ {status}</div></div>
         <div class="section-title">INSTALACIÓN EN SAFARI</div>
-        {install_actions if install_actions else '<div class="waiting"><div>📲</div><div><b>Prepara GBox o ESign desde tu bot</b><small>En Telegram toca Preparar instalación. Regresa aquí cuando esté lista la app firmada.</small></div></div>' if ready else ''}
+        {install_actions if install_actions else '<div class="waiting"><div>📲</div><div><b>Prepara GBox desde tu bot</b><small>En Telegram toca Preparar instalación. Regresa aquí cuando esté lista la app firmada.</small></div></div>' if ready else ''}
         <div class="grid">
           <div class="info"><div class="icon">🆔</div><div><small>UDID</small><b>{udid}</b></div></div>
           <div class="info"><div class="icon">📱</div><div><small>Dispositivo</small><b>{device}</b></div></div>
@@ -382,7 +385,7 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
         </div>
         <div class="password"><small>Contraseña del P12</small><code>{password}</code></div>
         {actions}
-        <div class="foot">Enlace privado generado por Randy Systems. No compartas este enlace con terceros.</div></section></main>
+        <div class="foot">Acceso privado · 50 días de garantía de tienda. Recupera tu enlace desde Tu certificado en Telegram. No compartas este enlace ni tu contraseña.</div></section></main>
         <button class="music-pill" id="music-pill" type="button" aria-label="Activar o pausar música"><span class="music-dot"></span><span id="music-label">Música automática</span></button>
         <audio id="bg-music" autoplay loop playsinline preload="auto" src="/certificate/music"></audio>
         {script}
@@ -402,6 +405,7 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; media-src 'self' data:")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -486,12 +490,20 @@ document.getElementById('install')?.addEventListener('click',()=>{{const link={j
             self.send_error(404, "Certificado no disponible")
             return
         try:
-            data = server.certificate_download(order)
+            raw = server.certificate_download(order)
+            filename = re.sub(r"[^A-Za-z0-9._ -]+", "_", str(order["display_name"] or "certificate")).strip(" ._")[:40] or "certificate"
+            package = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(raw)) as source, zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as target:
+                for suffixes, extension in (((".p12", ".pfx"), ".p12"), ((".mobileprovision", ".provisionprofile"), ".mobileprovision")):
+                    item = next((i for i in source.infolist() if not i.is_dir() and i.file_size <= 12 * 1024 * 1024 and i.filename.lower().endswith(suffixes)), None)
+                    if item is None:
+                        raise ValueError("Falta un componente del certificado")
+                    target.writestr(filename + extension, source.read(item))
+            data = package.getvalue()
         except Exception:
             log.exception("No se pudo descargar el certificado %s", order["id"])
             self.send_error(502, "No se pudo descargar el certificado")
             return
-        filename = "".join(c for c in order["display_name"] if c.isalnum() or c in "-_ ").strip() or "certificate"
         self.send_response(200)
         self.send_header("Content-Type", "application/zip")
         self.send_header("Content-Disposition", f'attachment; filename="{filename}.zip"')
