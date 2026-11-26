@@ -103,11 +103,14 @@ async function handleIncomingMessage(sock, msg) {
     if (!jid || jid === 'status@broadcast') return
     const parsed = parseCommand(getText(msg), config.prefix)
     if (!parsed) return
-    const handler = commands[parsed.command]
-    if (!handler) return
     if (sock !== currentSock || shuttingDown) return
     const id = msg.key.id
     if (id && !claimCommand(JSON.stringify([sock.user?.id, jid, msg.key.participant || '', id]))) return
+    if (parsed.command === 'memu') parsed.command = 'menu'
+    const handler = Object.hasOwn(commands, parsed.command) ? commands[parsed.command] : null
+    if (typeof handler !== 'function') {
+      return sock.sendMessage(jid, { text: '❌ Comando no reconocido. Usa ' + config.prefix + 'menu para ver los comandos disponibles.' }, { quoted: msg })
+    }
     const ctx = await buildContext(sock, msg, parsed)
     await handler(ctx)
   } catch (error) {
