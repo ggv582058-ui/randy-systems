@@ -36,6 +36,51 @@ async function convertGif(buffer) {
   } finally { await rm(dir, {recursive:true,force:true}).catch(()=>{}) }
 }
 
+
+// Original RS reaction artwork, independent of external GIF providers.
+const localLabels = {kiss:'BESO',hug:'ABRAZO',pat:'CARICIA',slap:'BROMA',highfive:'CHOCA LOS CINCO',poke:'TOQUE',dance:'BAILE',wave:'SALUDO',smile:'SONRISA',wink:'GUIÑO',cuddle:'CARIÑO',blush:'TIMIDEZ',cry:'CONSUELO',happy:'CELEBRACIÓN',bonk:'BROMA',handhold:'DE LA MANO'}
+function localFrame(action,i) {
+  const t = i * Math.PI / 12
+  const close = ['kiss','hug','cuddle','handhold'].includes(action)
+  const shift = close ? 13 + 12 * Math.sin(t/2)**2 : 3*Math.sin(t)
+  const jump = ['dance','happy','highfive'].includes(action) ? 8*Math.sin(t*2) : 2*Math.sin(t)
+  const a = 91+shift, b = 229-shift
+  function face(x,y,hair,flip) {
+    const eye = action==='kiss' || action==='wink' ? '<path d="M-22 -4 q8 -7 16 0 M6 -4 q8 -7 16 0" stroke="#20304a" stroke-width="3" fill="none" stroke-linecap="round"/>' : '<ellipse cx="-14" cy="-5" rx="4" ry="7" fill="#20304a"/><ellipse cx="14" cy="-5" rx="4" ry="7" fill="#20304a"/>'
+    return '<g transform="translate('+x+' '+y+')"><path d="M-42 65 Q-41 24 0 23 Q41 24 42 65" fill="'+hair+'" stroke="#c2d8ff" stroke-width="2"/><circle r="43" fill="'+hair+'"/><ellipse cy="7" rx="34" ry="35" fill="#ffe1cf"/><path d="M-34 -8 Q-39 -45 0 -42 Q39 -42 36 -7 Q20 -19 8 -27 Q-2 -8 -13 -17 Q-22 -7 -34 -8" fill="'+hair+'"/>'+eye+'<ellipse cx="-23" cy="12" rx="7" ry="4" fill="#ef9bad"/><ellipse cx="23" cy="12" rx="7" ry="4" fill="#ef9bad"/><path d="M-6 14 Q0 20 6 14" fill="none" stroke="#9d5364" stroke-width="2" stroke-linecap="round"/></g>'
+  }
+  const pulse=1+0.18*Math.sin(t*2)
+  return '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320"><defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#081225"/><stop offset="1" stop-color="#163e75"/></linearGradient></defs><rect width="320" height="320" rx="20" fill="url(#bg)"/><rect x="9" y="9" width="302" height="302" rx="18" fill="none" stroke="#5c98e8" stroke-opacity=".55"/><text x="160" y="32" text-anchor="middle" fill="#cbe1ff" font-family="sans-serif" font-size="13" font-weight="bold">RS ANIME EXPERIENCE</text><circle cx="160" cy="153" r="112" fill="#7cb6ff" fill-opacity=".08"/>'+face(a,155+jump,'#76a9ff',false)+face(b,155-jump,'#eaa1c9',true)+'<g transform="translate(160 '+(82-6*Math.sin(t))+') scale('+pulse+')"><path d="M0 21 C-8 10 -26 1 -23 -11 C-20 -24 -5 -24 0 -13 C5 -24 20 -24 23 -11 C26 1 8 10 0 21" fill="'+(close?'#ff91bd':'#79b9ff')+'"/></g><text x="160" y="253" text-anchor="middle" fill="#edf6ff" font-size="18" font-family="sans-serif" font-weight="bold">'+localLabels[action]+'</text><text x="160" y="281" text-anchor="middle" fill="#8db9ef" font-size="12" font-family="sans-serif">RANDY SYSTEMS</text></svg>'
+}
+async function localReaction(action) {
+  const dir = await mkdtemp(join(tmpdir(),'rs-reaction-'))
+  try {
+    for(let i=0;i<24;i++) {
+      const frame=join(dir,'frame-'+String(i).padStart(3,'0')+'.png')
+      await sharp(Buffer.from(localFrame(action,i))).png().toFile(frame)
+    }
+    const output=join(dir,'out.mp4')
+    await new Promise((resolve,reject)=>{
+      const child=spawn(ffmpegPath,['-nostdin','-y','-threads','1','-framerate','12','-i',join(dir,'frame-%03d.png'),'-an','-c:v','libx264','-threads','1','-preset','ultrafast','-pix_fmt','yuv420p','-movflags','+faststart',output],{stdio:'ignore'})
+      const timer=setTimeout(()=>child.kill('SIGKILL'),12000)
+      child.once('error',e=>{clearTimeout(timer);reject(e)})
+      child.once('close',code=>{clearTimeout(timer);code===0?resolve():reject(new Error('local ffmpeg '+code))})
+    })
+    const size=(await stat(output)).size
+    if(!size||size>4*1024*1024)throw new Error('local video size')
+    return await readFile(output)
+  } finally {await rm(dir,{recursive:true,force:true}).catch(()=>{})}
+}
+async function remoteReaction(category) {
+  const response = await axios.get('https://api.waifu.pics/sfw/' + category, {...http,timeout:4500,maxContentLength:16000})
+  const url = new URL(response.data.url)
+  if (url.protocol !== 'https:' || url.hostname !== 'i.waifu.pics' || url.username || url.password || url.port) throw new Error('unexpected asset host')
+  const asset = await axios.get(url.href, {...http,timeout:4500,responseType:'arraybuffer',maxContentLength:4*1024*1024})
+  const bytes = Buffer.from(asset.data)
+  if (bytes.length > 4*1024*1024 || !/^GIF8[79]a$/.test(bytes.subarray(0,6).toString())) throw new Error('invalid gif content')
+  return convertGif(bytes)
+}
+
 async function anime(ctx, action) {
   const [category, phrase, icon] = actions[action]
   const target = ctx.getTargetJid()
@@ -46,16 +91,21 @@ async function anime(ctx, action) {
   const mentions = [...new Set([ctx.sender,target])]
   mediaBusy = true
   try {
-    const response = await axios.get('https://api.waifu.pics/sfw/' + category, {...http,maxContentLength:16000})
-    const url = new URL(response.data.url)
-    if (url.protocol !== 'https:' || url.hostname !== 'i.waifu.pics' || !/\.gif$/i.test(url.pathname) || url.username || url.password || url.port) throw new Error('invalid asset')
-    const asset = await axios.get(url.href, {...http,responseType:'arraybuffer',maxContentLength:4*1024*1024})
-    const bytes = Buffer.from(asset.data)
-    if (bytes.length > 4*1024*1024 || !/^GIF8[79]a$/.test(bytes.subarray(0,6).toString())) throw new Error('invalid gif')
-    const video = await convertGif(bytes)
-    return await ctx.sock.sendMessage(ctx.jid,{video,gifPlayback:true,caption:text,mentions},{quoted:ctx.msg})
-  } catch {
-    return await ctx.sock.sendMessage(ctx.jid,{text:text+'\n⚠️ Animación no disponible en este momento.',mentions},{quoted:ctx.msg})
+    let video
+    try { video = await remoteReaction(category) }
+    catch (error) {
+      console.warn('RS anime external fallback:', category, error?.response?.status || error?.code || String(error?.message||'unknown').slice(0,100))
+      video = await localReaction(action)
+    }
+    try {
+      return await ctx.sock.sendMessage(ctx.jid,{video,gifPlayback:true,mimetype:'video/mp4',caption:text,mentions},{quoted:ctx.msg})
+    } catch (error) {
+      console.warn('RS anime GIF upload failed:', category, error?.code || String(error?.message||'unknown').slice(0,100))
+      return await ctx.sock.sendMessage(ctx.jid,{video,mimetype:'video/mp4',caption:text,mentions},{quoted:ctx.msg})
+    }
+  } catch (error) {
+    console.error('RS anime delivery failed:', category, error?.code || String(error?.message||'unknown').slice(0,100))
+    return await ctx.sock.sendMessage(ctx.jid,{text:text+'\n⚠️ WhatsApp no pudo enviar la animación.',mentions},{quoted:ctx.msg})
   } finally { mediaBusy = false }
 }
 
