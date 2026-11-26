@@ -2,24 +2,47 @@ import QRCode from 'qrcode'
 import { evaluate } from 'mathjs'
 import { timeAndDate, jidToNumber } from '../lib/utils.js'
 
+import { findGroupParticipant, normalizeWhatsAppJid } from '../lib/group-identity.js'
+
 async function resolveAvatar(ctx) {
   const target = ctx.getTargetJid() || ctx.sender
-  const number = jidToNumber(target)
-  const candidates = [
-    target,
-    number ? `${number}@s.whatsapp.net` : null,
-    ...(ctx.participants || [])
-      .filter(p => jidToNumber(p.id) === number)
-      .map(p => p.id)
-  ].filter(Boolean)
-
-  const unique = [...new Set(candidates)]
-  for (const jid of unique) {
+  const ids = new Set()
+  const add = value => {
+    const id = normalizeWhatsAppJid(value)
+    if (/^\d+@(lid|s\.whatsapp\.net)$/.test(id)) ids.add(id)
+  }
+  add(target)
+  if (!ctx.getTargetJid() || target === ctx.sender) {
+    add(ctx.msg?.key?.participantAlt)
+    if (!ctx.isGroup && !ctx.msg?.key?.fromMe) add(ctx.msg?.key?.remoteJidAlt)
+  }
+  const mapping = ctx.sock.signalRepository?.lidMapping
+  for (const id of [...ids]) {
+    try {
+      add(id.endsWith('@lid') ? await mapping?.getPNForLID?.(id) : await mapping?.getLIDForPN?.(id))
+    } catch {}
+  }
+  if (ctx.isGroup && typeof ctx.sock.groupMetadata === 'function') {
+    try {
+      const metadata = await ctx.sock.groupMetadata(ctx.jid)
+      const member = await findGroupParticipant(ctx.sock, metadata?.participants || [], [...ids])
+      add(member?.id); add(member?.phoneNumber); add(member?.lid)
+    } catch {}
+  }
+  // Only use verified alternate identities. A LID's digits are not a phone number.
+  const candidates = [...ids].sort((a,b) => Number(b.endsWith('@s.whatsapp.net')) - Number(a.endsWith('@s.whatsapp.net')))
+  let lastStatus = null
+  for (const jid of candidates) {
     for (const type of ['image', 'preview']) {
-      const url = await ctx.sock.profilePictureUrl(jid, type).catch(() => null)
-      if (url) return { url, jid }
+      try {
+        const url = await ctx.sock.profilePictureUrl(jid, type)
+        if (url) return { url, jid: target }
+      } catch (error) {
+        lastStatus = error?.output?.statusCode || error?.statusCode || error?.code || 'unavailable'
+      }
     }
   }
+  console.warn('RS avatar unavailable:', { candidates: candidates.length, status: lastStatus })
   return { url: null, jid: target }
 }
 
