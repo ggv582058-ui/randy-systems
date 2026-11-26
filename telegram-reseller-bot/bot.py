@@ -3335,10 +3335,22 @@ async def run_bots() -> None:
             row = db.install_order(token)
             if not row:
                 return None
+            if row["status"] in ("revoked", "failed", "cancelled"):
+                return None
             try:
-                if datetime.fromisoformat(row["install_expires_at"]) < datetime.now(timezone.utc):
+                expires = datetime.fromisoformat(row["install_expires_at"].replace("Z", "+00:00"))
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                # Keep existing links available throughout the store's 50-day warranty.
+                # Afterwards the owner can renew the same link via their Telegram account.
+                if row["status"] == "completed":
+                    completed = datetime.fromisoformat((row["completed_at"] or row["created_at"]).replace("Z", "+00:00"))
+                    if completed.tzinfo is None:
+                        completed = completed.replace(tzinfo=timezone.utc)
+                    expires = max(expires, completed + timedelta(days=50))
+                if expires < datetime.now(timezone.utc):
                     return None
-            except ValueError:
+            except (ValueError, TypeError, AttributeError):
                 return None
             return row
 
