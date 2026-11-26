@@ -48,17 +48,23 @@ class CertificateDeliveryTests(unittest.IsolatedAsyncioTestCase):
             await experience.send_app_selector(client, order)
         self.assertEqual([item[0] for item in events], ["message", "documents", "message", "app"])
         self.assertEqual([item.caption for item in events[1][1][1]],
-                         [bot.developer_text("P12 · Test User"), bot.developer_text("Perfil · Test User")])
+                         [bot.developer_text("P12 · Test User"), bot.developer_text("Perfil · Test User"),
+                          bot.developer_text("ZIP · Test User | P12 + Perfil")])
         self.assertEqual([item.media.filename for item in events[1][1][1]],
-                         ["Test User.p12", "Test User.mobileprovision"])
-        self.assertTrue(all(item.thumbnail for item in events[1][1][1]))
+                         ["Test User.p12", "Test User.mobileprovision", "Test User.zip"])
+        self.assertTrue(all(item.thumbnail for item in events[1][1][1][:2]))
+        with zipfile.ZipFile(io.BytesIO(events[1][1][1][2].media.input_file_content)) as result:
+            self.assertEqual(result.namelist(), ["Test User.p12", "Test User.mobileprovision"])
+            self.assertEqual(result.read("Test User.p12"), b"p12-content")
+            self.assertEqual(result.read("Test User.mobileprovision"), b"profile-content")
         self.assertIn("secret", events[2][1][1])
         buttons = events[3][2]["reply_markup"].inline_keyboard
         self.assertEqual([button.callback_data for button in buttons[0]],
                          ["certapp:sign_gbox:41"])
         self.assertIn("Firmar con GBox", events[3][2]["caption"])
         self.assertNotIn("ESign", events[3][2]["caption"])
-        self.assertEqual(len(buttons), 1)
+        self.assertEqual(len(buttons), 2)
+        self.assertEqual(buttons[1][0].callback_data, "certapp:web:41")
         self.assertEqual(len(buttons[0]), 1)
         with patch.object(bot.db, "signed_certificate_app", return_value={"version": "6.1.2"}), \
              patch.dict("os.environ", {"RENDER_EXTERNAL_URL": "https://example.test"}):
