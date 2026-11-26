@@ -26,7 +26,7 @@ async function changeMember(ctx, action, successMessage) {
 async function removeNonAdmins(ctx) {
   const usage = 'Uso: ' + config.prefix + 'kill @all'
   if (!ctx.isGroup) return ctx.reply('❌ Este comando solo funciona en grupos.')
-  if (ctx.argText?.trim().toLowerCase() !== '@all') return ctx.reply(usage + '\nExpulsa a todos los miembros sin rango de administrador.')
+  if (!['@all', 'all'].includes(ctx.argText?.trim().toLowerCase())) return ctx.reply(usage + '\nExpulsa a todos los miembros sin rango de administrador.')
   try {
     // Always use fresh roles. Never use cached permissions for mass removal.
     const metadata = await ctx.sock.groupMetadata(ctx.jid)
@@ -67,7 +67,7 @@ export const groupCommands = {
   admins: async ctx => { if (needGroup(ctx)) return; const admins = ctx.participants.filter(p => p.admin).map(p => p.id); const text = admins.map((j, i) => `${i + 1}. @${jidToNumber(j)}`).join('\n') || 'Sin administradores.'; return ctx.sock.sendMessage(ctx.jid, { text: `👑 *Administradores*\n${text}`, mentions: admins }, { quoted: ctx.msg }) },
   tagall: async ctx => { if (guard(ctx)) return; const users = ctx.participants.map(p => p.id); const text = users.map(j => `@${jidToNumber(j)}`).join(' '); return ctx.sock.sendMessage(ctx.jid, { text: `📢 ${ctx.argText || 'Atención'}\n\n${text}`, mentions: users }, { quoted: ctx.msg }) },
   hidetag: async ctx => { if (guard(ctx)) return; const users = ctx.participants.map(p => p.id); return ctx.sock.sendMessage(ctx.jid, { text: ctx.argText || '📢 Atención', mentions: users }, { quoted: ctx.msg }) },
-  kick: async ctx => { if (guard(ctx, true)) return; return changeMember(ctx, 'remove', '✅ Usuario removido.') },
+  kick: async ctx => { if (['@all', 'all'].includes(ctx.argText?.trim().toLowerCase())) return removeNonAdmins(ctx); if (guard(ctx, true)) return; return changeMember(ctx, 'remove', '✅ Usuario removido.') },
   add: async ctx => { if (guard(ctx, true)) return; const n = ctx.args[0]?.replace(/\D/g, ''); if (!n) return ctx.reply('Uso: .add 15551234567'); await ctx.sock.groupParticipantsUpdate(ctx.jid, [`${n}@s.whatsapp.net`], 'add'); return ctx.reply('✅ Solicitud enviada.') },
   promote: async ctx => { if (guard(ctx, true)) return; return changeMember(ctx, 'promote', '✅ Ahora es administrador.') },
   demote: async ctx => { if (guard(ctx, true)) return; return changeMember(ctx, 'demote', '✅ Administrador removido.') },
