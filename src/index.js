@@ -11,6 +11,7 @@ import { config } from './config.js'
 import { getText, parseCommand } from './lib/utils.js'
 import { buildContext } from './lib/context.js'
 import { commands } from './commands/index.js'
+import { rememberIncomingSoundSticker } from './commands/stickers.js'
 import { createSessionStore } from './lib/session-store.js'
 
 const logger = pino({ level: config.logLevel })
@@ -151,7 +152,10 @@ async function startBot() {
   })
   sock.ev.on('messages.upsert', ({ messages, type }) => {
     if (type !== 'notify' || sock !== currentSock || shuttingDown) return
-    for (const msg of messages) void handleIncomingMessage(sock, msg)
+    for (const msg of messages) {
+      try { rememberIncomingSoundSticker(sock, msg) } catch {}
+      void handleIncomingMessage(sock, msg)
+    }
   })
   return sock
 }
