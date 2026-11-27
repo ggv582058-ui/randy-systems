@@ -283,21 +283,34 @@ StickerProto.decode = function(reader, length, ...rest) {
   return result
 }
 
-if (!StickerProto.prototype.audioMessage) {
-  StickerProto.prototype.audioMessage = null
-  StickerProto.encode = function(message, writer) {
-    writer = originalStickerEncode.call(this, message, writer)
-    if (message.audioMessage != null) proto.Message.AudioMessage.encode(message.audioMessage, writer.uint32(210).fork()).ldelim()
-    return writer
-  }
-  // The outgoing media is built below with an explicit field assignment.
+// WhatsApp native sound stickers use Message.134 -> FutureProofMessage.1
+// -> Message.26 -> StickerMessage.26 (AudioMessage).
+// Keep the normal sticker shape in memory for Baileys' media classification,
+// and wrap only the explicitly marked outgoing sound stickers on the wire.
+const originalMessageEncode = proto.Message.encode
+const soundAudio = new WeakMap()
+proto.Message.encode = function(message, writer) {
+  const sticker = message?.stickerMessage
+  const audio = sticker && soundAudio.get(sticker)
+  if (!audio) return originalMessageEncode.call(this, message, writer)
+  const other = { ...message, stickerMessage: undefined }
+  writer = originalMessageEncode.call(this, other, writer)
+  const nested = writer.uint32(1074).fork().uint32(10).fork().uint32(210).fork()
+  originalStickerEncode.call(StickerProto, sticker, nested)
+  nested.uint32(192).uint32(0)
+  proto.Message.AudioMessage.encode(audio, nested.uint32(210).fork()).ldelim()
+  nested.ldelim().ldelim().ldelim()
+  return writer
 }
+
 function soundStickerCodecReady() {
   const sample = new StickerProto({ isAnimated: true })
-  sample.audioMessage = new proto.Message.AudioMessage({ seconds: 3 })
-  const encoded = StickerProto.encode(sample).finish()
-  const tail = Array.from(encoded.slice(-5))
-  return tail.join(',') === '210,1,2,40,3'
+  soundAudio.set(sample, new proto.Message.AudioMessage({ seconds: 3 }))
+  const encoded = proto.Message.encode({ stickerMessage: sample }).finish()
+  // A minimal wire sample must begin with the 134 envelope and contain
+  // the nested audio field, not the old unwrapped sticker.
+  return encoded[0] === 178 && encoded[1] === 8 &&
+    Array.from(encoded.slice(-5)).join(',') === '210,1,2,40,3'
 }
 let audioStickerBusy = false
 
@@ -340,9 +353,13 @@ async function stickerWithAudio(ctx) {
     if (!soundStickerCodecReady()) throw new Error('SOUND_STICKER_CODEC')
     const options = { upload: ctx.sock.waUploadToServer }
     const preparedSticker = await prepareWAMessageMedia({ sticker, isAnimated: true }, options)
-    const preparedAudio = await prepareWAMessageMedia({ audio, mimetype: 'audio/ogg; codecs=opus', ptt: true, seconds: Number(content?.seconds || 0) || undefined }, options)
+    const preparedAudio = await prepareWAMessageMedia({ audio, mimetype: 'audio/ogg; codecs=opus', ptt: false, seconds: Number(content?.seconds || 0) || undefined }, options)
     const payload = generateWAMessageFromContent(ctx.jid, preparedSticker, { userJid: ctx.sock.user.id, quoted: ctx.msg })
-    payload.message.stickerMessage.audioMessage = preparedAudio.audioMessage
+    if (!payload.message?.stickerMessage || !preparedAudio.audioMessage) throw new Error('SOUND_STICKER_MEDIA')
+    soundAudio.set(payload.message.stickerMessage, preparedAudio.audioMessage)
+    const wire = proto.Message.encode(payload.message).finish()
+    if (!wire.length) throw new Error('SOUND_STICKER_WIRE')
+    console.info('RS sound sticker: native envelope encoded', { bytes: wire.length })
     await ctx.sock.relayMessage(ctx.jid, payload.message, { messageId: payload.key.id })
     return
   } catch (error) {
@@ -381,6 +398,7 @@ async function soundInfo(ctx) {
 export const stickerCommands = {
   soundinfo: soundInfo,
   sa: stickerWithAudio,
+  saudio: stickerWithAudio,
   stickeraudio: stickerWithAudio,
   sticker: async ctx => {
     try {
