@@ -161,14 +161,67 @@ function writeUInt24LE(buffer, value, offset) {
   buffer[offset + 2] = (value >>> 16) & 0xff
 }
 
-function buildStickerExif(pack, author, fresh = false) {
-  const metadata = Buffer.from(JSON.stringify({ 'sticker-pack-id': makeStickerPackId(pack, author, { fresh }), 'sticker-pack-name': pack, 'sticker-pack-publisher': author, emojis: ['⚡'] }), 'utf8')
-  const exif = Buffer.concat([Buffer.from([0x49,0x49,0x2a,0x00,0x08,0x00,0x00,0x00,0x01,0x00,0x41,0x57,0x07,0x00,0x00,0x00,0x00,0x00,0x16,0x00,0x00,0x00]), metadata])
-  exif.writeUInt32LE(metadata.length, 14)
+// WhatsApp's private TIFF tag 0x5741 contains sticker metadata as JSON.
+// Retain the audio hash while changing names; parse both TIFF byte orders.
+function readStickerMetadata(webp) {
+  try {
+    let exif = parseWebpChunks(webp).find(chunk => chunk.type === 'EXIF')?.data
+    if (!exif || exif.length > 65536) return {}
+    if (exif.toString('ascii',0,6) === 'Exif\u0000\u0000') exif = exif.subarray(6)
+    if (exif.length < 22) return {}
+    const order = exif.toString('ascii',0,2)
+    if (!['II','MM'].includes(order)) return {}
+    const u16 = n => order === 'II' ? exif.readUInt16LE(n) : exif.readUInt16BE(n)
+    const u32 = n => order === 'II' ? exif.readUInt32LE(n) : exif.readUInt32BE(n)
+    if (u16(2) !== 42) return {}
+    const ifd = u32(4)
+    if (ifd + 2 > exif.length) return {}
+    const count = u16(ifd)
+    for (let i=0;i<Math.min(count,64);i++) {
+      const p=ifd+2+i*12
+      if(p+12>exif.length) break
+      if(u16(p)!==0x5741 || ![1,2,7].includes(u16(p+2))) continue
+      const size=u32(p+4), offset=size<=4?p+8:u32(p+8)
+      if(size<2||size>32768||offset+size>exif.length) return {}
+      const obj=JSON.parse(exif.toString('utf8',offset,offset+size).replace(/\u0000+$/,''))
+      return obj && typeof obj==='object' && !Array.isArray(obj) ? obj : {}
+    }
+  } catch {}
+  return {}
+}
+function soundDigest(value) {
+  try {
+    if (typeof value === 'string') {
+      if (!/^[A-Za-z0-9+/]{43}=$/.test(value)) return ''
+      const bytes=Buffer.from(value,'base64')
+      return bytes.length===32 ? bytes.toString('base64') : ''
+    }
+    return value instanceof Uint8Array && value.length===32 ? Buffer.from(value).toString('base64') : ''
+  } catch { return '' }
+}
+function encodeStickerExif(obj) {
+  const metadata = Buffer.from(JSON.stringify(obj),'utf8')
+  const exif=Buffer.concat([Buffer.from([0x49,0x49,0x2a,0x00,0x08,0x00,0x00,0x00,0x01,0x00,0x41,0x57,0x07,0x00,0x00,0x00,0x00,0x00,0x16,0x00,0x00,0x00]),metadata])
+  exif.writeUInt32LE(metadata.length,14)
   return exif
 }
+function buildStickerExif(pack, author, fresh = false, previous = {}, audio = null) {
+  const hash=soundDigest(audio?.fileSha256)||soundDigest(previous['sound-sha256'])
+  const obj={...previous,'sticker-pack-id':makeStickerPackId(pack,author,{fresh}),'sticker-pack-name':pack,'sticker-pack-publisher':author,emojis:Array.isArray(previous.emojis)?previous.emojis:['⚡']}
+  if(hash) obj['sound-sha256']=hash
+  return encodeStickerExif(obj)
+}
+function attachSoundMetadata(webp,audio) {
+  const hash=soundDigest(audio?.fileSha256)
+  if(!hash) throw Error('SOUND_STICKER_HASH_UNAVAILABLE')
+  const meta=readStickerMetadata(webp)
+  if (soundDigest(meta['sound-sha256'])===hash) return webp
+  // Retain existing name and pack id; use the normal metadata writer for VP8X.
+  return addStickerMetadata(webp,meta['sticker-pack-name']??'RANDY SYSTEMS',meta['sticker-pack-publisher']??'',{audio,keepPackId:true})
+}
 
-function addStickerMetadata(webp, pack, author, { fresh = false } = {}) {
+function addStickerMetadata(webp, pack, author, { fresh = false, audio = null, keepPackId = false } = {}) {
+  const previous=readStickerMetadata(webp)
   const chunks = parseWebpChunks(webp)
   const filtered = chunks.filter(chunk => chunk.type !== 'EXIF')
   let vp8x = filtered.find(chunk => chunk.type === 'VP8X')
@@ -182,7 +235,9 @@ function addStickerMetadata(webp, pack, author, { fresh = false } = {}) {
     if (!width || !height) throw new Error('No pude leer las dimensiones del sticker.')
     const data = Buffer.alloc(10); data[0] = 0x08 | (hasAlpha ? 0x10 : 0); writeUInt24LE(data, width - 1, 4); writeUInt24LE(data, height - 1, 7); vp8x = { type: 'VP8X', data }; filtered.unshift(vp8x)
   }
-  const exifChunk = { type: 'EXIF', data: buildStickerExif(pack, author, fresh) }
+  const data=buildStickerExif(pack,author,fresh,previous,audio)
+  const meta=keepPackId && typeof previous['sticker-pack-id']==='string' ? {...previous,'sound-sha256':soundDigest(audio?.fileSha256)||soundDigest(previous['sound-sha256'])} : null
+  const exifChunk = { type: 'EXIF', data: meta ? encodeStickerExif(meta) : data }
   const xmpIndex = filtered.findIndex(chunk => chunk.type === 'XMP ')
   if (xmpIndex >= 0) filtered.splice(xmpIndex, 0, exifChunk); else filtered.push(exifChunk)
   return rebuildWebp(filtered)
@@ -210,16 +265,17 @@ function rememberSoundSticker(ctx, id, content, audio) {
   for (const [k,v] of recentSoundStickers) if (v.expires <= now) recentSoundStickers.delete(k)
   recentSoundStickers.delete(key)
   while (recentSoundStickers.size >= 300) recentSoundStickers.delete(recentSoundStickers.keys().next().value)
-  recentSoundStickers.set(key,{scope,hash:soundHash(content),audio,expires:now+SOUND_TTL})
+  recentSoundStickers.set(key,{scope,hash:soundHash(content),audioHash:soundDigest(audio.fileSha256),audio,expires:now+SOUND_TTL})
 }
-function recoverSoundSticker(ctx, content) {
+function recoverSoundSticker(ctx, content, audioHash = '') {
   const info = ctx.msg?.message?.extendedTextMessage?.contextInfo ||
     ctx.msg?.message?.imageMessage?.contextInfo || ctx.msg?.message?.videoMessage?.contextInfo
   const scope = soundScope(ctx), hash = soundHash(content), now = Date.now()
   const exact = info?.stanzaId && recentSoundStickers.get(JSON.stringify([scope,info.stanzaId]))
   if (exact && exact.expires > now && (!hash || !exact.hash || exact.hash === hash)) return exact.audio
-  if (!hash) return null
-  const matches = [...recentSoundStickers.values()].filter(v=>v.scope===scope && v.hash===hash && v.expires>now)
+  if (!hash && !audioHash) return null
+  const matches = [...recentSoundStickers.values()].filter(v=>v.scope===scope && v.expires>now && ((hash && v.hash===hash) || (audioHash && v.audioHash===audioHash)))
+  if(audioHash) return matches.find(v=>v.audioHash===audioHash)?.audio || null
   // Avoid choosing a different soundtrack if several messages match.
   return matches.length===1 ? matches[0].audio : null
 }
@@ -252,9 +308,11 @@ async function mediaAsWebp(ctx) {
   if (type.includes('stickerMessage')) {
     const quoted = ctx.msg?.message?.extendedTextMessage?.contextInfo?.quotedMessage || ctx.msg?.message?.imageMessage?.contextInfo?.quotedMessage || ctx.msg?.message?.videoMessage?.contextInfo?.quotedMessage
     const embedded = content?.audioMessage || soundAudio.get(content) || findSoundSticker(quoted)?.audio
-    const audio = validSoundAudio(embedded) ? embedded : recoverSoundSticker(ctx,content)
-    console.info('RS sticker edit source:', { audio: Boolean(audio), embedded: Boolean(embedded), recovered: Boolean(audio && audio !== embedded) })
-    if (embedded && !audio) throw new Error('SOUND_STICKER_AUDIO_UNAVAILABLE')
+    const audioHash=soundDigest(readStickerMetadata(buffer)['sound-sha256'])
+    const audio = validSoundAudio(embedded) ? embedded : recoverSoundSticker(ctx,content,audioHash)
+    console.info('RS sticker edit source:', { audio: Boolean(audio), embedded: Boolean(embedded), recovered: Boolean(audio && audio !== embedded), soundMetadata:Boolean(audioHash) })
+    if ((embedded || audioHash || ctx.args?.includes('--audio')) && !audio) throw new Error('SOUND_STICKER_AUDIO_UNAVAILABLE')
+    if(audioHash && soundDigest(audio?.fileSha256) && audioHash!==soundDigest(audio.fileSha256)) throw new Error('SOUND_STICKER_AUDIO_UNAVAILABLE')
     return { webp: buffer, audio }
   }
   throw new Error('unsupported sticker source')
@@ -272,17 +330,19 @@ async function swm(ctx) {
     const [packPart, authorPart] = ctx.args.join(' ').trim().split('|').map(value => value.trim())
     const sticker = addStickerMetadata(webp, (packPart || 'RANDY SYSTEMS').slice(0, 100), (authorPart || 'Randy').slice(0, 100))
     return await sendEditedSticker(ctx, sticker, audio)
-  } catch (error) { console.error('SWM sticker error:', error); return ctx.reply('❌ No pude cambiar el nombre del sticker. Responde a una imagen o sticker con *.swm Nombre | Autor*.') }
+  } catch (error) { if(error?.message === 'SOUND_STICKER_AUDIO_UNAVAILABLE' || error?.message === 'SOUND_STICKER_HASH_UNAVAILABLE') return ctx.reply('🔊 No recibí el audio original. Reenvía el sticker que todavía tiene sonido o responde al video con .sa Nombre. No envié una copia muda.');
+ console.error('SWM sticker error:', error); return ctx.reply('❌ No pude cambiar el nombre del sticker. Responde a una imagen o sticker con *.swm Nombre | Autor*.') }
 }
 
 async function ske(ctx) {
-  const customName = ctx.args.join(' ').trim()
+  const customName = ctx.args.filter(a=>a!=='--audio').join(' ').trim()
   if (!customName) return ctx.reply('❌ Escribe el nombre. Ejemplo: *.ske Randy*')
   try {
     const { webp, audio } = await mediaAsWebp(ctx)
     const sticker = addStickerMetadata(webp, customName.slice(0, 100), '', { fresh: true })
     return await sendEditedSticker(ctx, sticker, audio)
-  } catch (error) {
+  } catch (error) { if(error?.message === 'SOUND_STICKER_AUDIO_UNAVAILABLE' || error?.message === 'SOUND_STICKER_HASH_UNAVAILABLE') return ctx.reply('🔊 No recibí el audio original. Reenvía el sticker que todavía tiene sonido o responde al video con .sa Nombre. No envié una copia muda.');
+
     const status = error?.output?.statusCode || error?.status || error?.code || 'unknown'
     console.error('SKE failed:', { status, reason: String(error?.message || error).slice(0, 160) })
     return ctx.reply('❌ No se pudo crear el sticker. Si es uno viejo de Favoritos, WhatsApp podría no entregar el archivo original. Prueba reenviándolo como imagen normal, o usa una foto con .s antes de cambiarle el nombre con .ske.')
@@ -299,16 +359,18 @@ async function letr(ctx) {
 
 async function sck(ctx) {
   try { const { webp, audio } = await mediaAsWebp(ctx); return await sendEditedSticker(ctx, stripStickerMetadata(webp), audio) }
-  catch (error) { console.error('SCK sticker error:', error); return ctx.reply('❌ No pude limpiar ese sticker. Responde directamente al sticker o imagen con *.sck*.') }
+  catch (error) { if(error?.message === 'SOUND_STICKER_AUDIO_UNAVAILABLE' || error?.message === 'SOUND_STICKER_HASH_UNAVAILABLE') return ctx.reply('🔊 No recibí el audio original. Reenvía el sticker que todavía tiene sonido o responde al video con .sa Nombre. No envié una copia muda.');
+ console.error('SCK sticker error:', error); return ctx.reply('❌ No pude limpiar ese sticker. Responde directamente al sticker o imagen con *.sck*.') }
 }
 
 async function cl(ctx) {
   try {
     const { webp, audio } = await mediaAsWebp(ctx)
-    const pack = String(ctx.args.join(' ').trim() || ctx.msg?.pushName || ctx.senderNumber || 'Usuario').slice(0, 100)
+    const pack = String(ctx.args.filter(a=>a!=='--audio').join(' ').trim() || ctx.msg?.pushName || ctx.senderNumber || 'Usuario').slice(0, 100)
     const author = String(config.botName || 'RANDY SYSTEMS').slice(0, 100)
     return await sendEditedSticker(ctx, addStickerMetadata(webp, pack, author), audio)
-  } catch (error) { console.error('CL sticker error:', error); return ctx.reply('❌ Responde a una imagen o sticker con *.cl*. El pack llevará tu nombre y el autor será RANDY SYSTEMS.') }
+  } catch (error) { if(error?.message === 'SOUND_STICKER_AUDIO_UNAVAILABLE' || error?.message === 'SOUND_STICKER_HASH_UNAVAILABLE') return ctx.reply('🔊 No recibí el audio original. Reenvía el sticker que todavía tiene sonido o responde al video con .sa Nombre. No envié una copia muda.');
+ console.error('CL sticker error:', error); return ctx.reply('❌ Responde a una imagen o sticker con *.cl*. El pack llevará tu nombre y el autor será RANDY SYSTEMS.') }
 }
 
 
@@ -431,6 +493,7 @@ async function extractStickerAudio(buffer) {
 }
 
 async function relaySoundSticker(ctx, sticker, audio) {
+  sticker = attachSoundMetadata(sticker,audio)
   const prepared = await prepareWAMessageMedia({ sticker, isAnimated: parseWebpChunks(sticker).some(c=>c.type==='ANIM') }, { upload: ctx.sock.waUploadToServer })
   const payload = generateWAMessageFromContent(ctx.jid, prepared, { userJid: ctx.sock.user.id, quoted: ctx.msg })
   if (!payload.message?.stickerMessage || !audio) throw new Error('SOUND_STICKER_MEDIA')
