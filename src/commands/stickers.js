@@ -189,18 +189,24 @@ function addStickerMetadata(webp, pack, author, { fresh = false } = {}) {
 }
 
 async function mediaAsWebp(ctx) {
-  const { buffer, type } = await ctx.downloadQuotedOrCurrent()
-  if (type.includes('imageMessage')) return imageToWebp(buffer)
-  if (type.includes('stickerMessage')) return buffer
+  const { buffer, type, content } = await ctx.downloadQuotedOrCurrent()
+  if (type.includes('imageMessage')) return { webp: await imageToWebp(buffer), audio: null }
+  if (type.includes('stickerMessage')) return { webp: buffer, audio: content?.audioMessage || soundAudio.get(content) || null }
   throw new Error('unsupported sticker source')
+}
+
+async function sendEditedSticker(ctx, sticker, audio) {
+  if (!audio) return ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
+  if (!soundStickerCodecReady() || !audio.mediaKey || !(audio.directPath || audio.url)) throw new Error('SOUND_STICKER_AUDIO_UNAVAILABLE')
+  return relaySoundSticker(ctx, sticker, audio)
 }
 
 async function swm(ctx) {
   try {
-    const webp = await mediaAsWebp(ctx)
+    const { webp, audio } = await mediaAsWebp(ctx)
     const [packPart, authorPart] = ctx.args.join(' ').trim().split('|').map(value => value.trim())
     const sticker = addStickerMetadata(webp, (packPart || 'RANDY SYSTEMS').slice(0, 100), (authorPart || 'Randy').slice(0, 100))
-    return ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
+    return await sendEditedSticker(ctx, sticker, audio)
   } catch (error) { console.error('SWM sticker error:', error); return ctx.reply('❌ No pude cambiar el nombre del sticker. Responde a una imagen o sticker con *.swm Nombre | Autor*.') }
 }
 
@@ -208,9 +214,9 @@ async function ske(ctx) {
   const customName = ctx.args.join(' ').trim()
   if (!customName) return ctx.reply('❌ Escribe el nombre. Ejemplo: *.ske Randy*')
   try {
-    const webp = await mediaAsWebp(ctx)
+    const { webp, audio } = await mediaAsWebp(ctx)
     const sticker = addStickerMetadata(webp, customName.slice(0, 100), '', { fresh: true })
-    return await ctx.sock.sendMessage(ctx.jid, { sticker }, { quoted: ctx.msg })
+    return await sendEditedSticker(ctx, sticker, audio)
   } catch (error) {
     const status = error?.output?.statusCode || error?.status || error?.code || 'unknown'
     console.error('SKE failed:', { status, reason: String(error?.message || error).slice(0, 160) })
@@ -227,16 +233,16 @@ async function letr(ctx) {
 }
 
 async function sck(ctx) {
-  try { const webp = await mediaAsWebp(ctx); return ctx.sock.sendMessage(ctx.jid, { sticker: stripStickerMetadata(webp) }, { quoted: ctx.msg }) }
+  try { const { webp, audio } = await mediaAsWebp(ctx); return await sendEditedSticker(ctx, stripStickerMetadata(webp), audio) }
   catch (error) { console.error('SCK sticker error:', error); return ctx.reply('❌ No pude limpiar ese sticker. Responde directamente al sticker o imagen con *.sck*.') }
 }
 
 async function cl(ctx) {
   try {
-    const webp = await mediaAsWebp(ctx)
+    const { webp, audio } = await mediaAsWebp(ctx)
     const pack = String(ctx.msg?.pushName || ctx.senderNumber || 'Usuario').slice(0, 100)
     const author = String(config.botName || 'RANDY SYSTEMS').slice(0, 100)
-    return ctx.sock.sendMessage(ctx.jid, { sticker: addStickerMetadata(webp, pack, author) }, { quoted: ctx.msg })
+    return await sendEditedSticker(ctx, addStickerMetadata(webp, pack, author), audio)
   } catch (error) { console.error('CL sticker error:', error); return ctx.reply('❌ Responde a una imagen o sticker con *.cl*. El pack llevará tu nombre y el autor será RANDY SYSTEMS.') }
 }
 
@@ -245,41 +251,76 @@ async function cl(ctx) {
 const StickerProto = proto.Message.StickerMessage
 const originalStickerEncode = StickerProto.encode
 const originalStickerDecode = StickerProto.decode
-// Inspect wire tags on the explicitly quoted sticker, without retaining media bytes.
+const originalMessageDecode = proto.Message.decode
 const stickerWireFields = new WeakMap()
-StickerProto.decode = function(reader, length, ...rest) {
+const soundAudio = new WeakMap()
+
+// Inspect a bounded protobuf slice, keeping only the embedded media descriptor.
+function wireSlice(reader, length) {
   const input = reader?.buf instanceof Uint8Array ? reader.buf : reader instanceof Uint8Array ? reader : null
   const start = reader?.pos ?? 0
   const end = length == null ? (reader?.len ?? input?.length ?? 0) : start + length
-  const result = originalStickerDecode.call(this, reader, length, ...rest)
-  if (!input || end > input.length || end - start > 262144) return result
-  try {
-    let pos = start
-    function readVarint() {
-      let value = 0, factor = 1
-      for (let i = 0; i < 10 && pos < end; i++) {
-        const b = input[pos++]
-        value += (b & 127) * factor
-        if (!(b & 128)) return value
-        factor *= 128
+  if (!input || end > input.length || end < start || end-start > 1024*1024) return null
+  return input.subarray(start,end)
+}
+function wireFields(bytes) {
+  if (!bytes) return []
+  let p=0
+  const fields=[]
+  function varint() {
+    let n=0, f=1
+    for(let i=0;i<10 && p<bytes.length;i++){
+      const b=bytes[p++]; n+=(b&127)*f
+      if(!(b&128))return n
+      f*=128
+    }
+    throw new Error('invalid varint')
+  }
+  while(p<bytes.length && fields.length<512){
+    const tag=varint(), field=Math.floor(tag/8), wire=tag%8
+    if(!field)throw new Error('invalid field')
+    let data=null
+    if(wire===0)varint()
+    else if(wire===1)p+=8
+    else if(wire===5)p+=4
+    else if(wire===2){
+      const n=varint()
+      if(!Number.isSafeInteger(n)||n<0||p+n>bytes.length)throw new Error('invalid field length')
+      data=bytes.subarray(p,p+n);p+=n
+    }else throw new Error('unsupported wire type')
+    if(p>bytes.length)throw new Error('truncated wire')
+    fields.push({field,wire,data})
+  }
+  return fields
+}
+StickerProto.decode = function(reader,length,...rest) {
+  const bytes=wireSlice(reader,length)
+  const result=originalStickerDecode.call(this,reader,length,...rest)
+  try{
+    const fields=wireFields(bytes)
+    stickerWireFields.set(result,fields.map(f=>f.field+':'+f.wire+(f.data?'('+f.data.length+' bytes)':'')).join(', '))
+    const raw=fields.find(f=>f.field===26&&f.wire===2)?.data
+    const audio=result.audioMessage || (raw && proto.Message.AudioMessage.decode(raw))
+    if(audio){result.audioMessage=audio;soundAudio.set(result,audio)}
+  }catch{}
+  return result
+}
+proto.Message.decode = function(reader,length,...rest) {
+  const bytes=wireSlice(reader,length)
+  const result=originalMessageDecode.call(this,reader,length,...rest)
+  try{
+    const raw=wireFields(bytes).find(f=>f.field===134&&f.wire===2)?.data
+    if(raw){
+      const body=wireFields(raw).find(f=>f.field===1&&f.wire===2)?.data
+      const stickerBytes=wireFields(body).find(f=>f.field===26&&f.wire===2)?.data
+      if(stickerBytes && !result.stickerMessage) {
+        const sticker=StickerProto.decode(stickerBytes)
+        result.stickerMessage=sticker
+        // Baileys sees an ordinary sticker; its attached audio stays on the sticker.
+        if (result.audioStickerMessage) delete result.audioStickerMessage
       }
-      throw Error('invalid varint')
     }
-    const fields = []
-    while (pos < end && fields.length < 100) {
-      const tag = readVarint(), field = Math.floor(tag / 8), wire = tag % 8
-      if (!field) break
-      let size = 0
-      if (wire === 0) { readVarint() }
-      else if (wire === 1) { pos += 8; size = 8 }
-      else if (wire === 5) { pos += 4; size = 4 }
-      else if (wire === 2) { size = readVarint(); pos += size }
-      else break
-      if (pos > end) break
-      fields.push(field + ':' + wire + (wire === 2 ? '(' + size + ' bytes)' : ''))
-    }
-    stickerWireFields.set(result, fields.join(', '))
-  } catch {}
+  }catch{}
   return result
 }
 
@@ -288,10 +329,9 @@ StickerProto.decode = function(reader, length, ...rest) {
 // Keep the normal sticker shape in memory for Baileys' media classification,
 // and wrap only the explicitly marked outgoing sound stickers on the wire.
 const originalMessageEncode = proto.Message.encode
-const soundAudio = new WeakMap()
 proto.Message.encode = function(message, writer) {
   const sticker = message?.stickerMessage
-  const audio = sticker && soundAudio.get(sticker)
+  const audio = sticker && (soundAudio.get(sticker) || sticker.audioMessage)
   if (!audio) return originalMessageEncode.call(this, message, writer)
   const other = { ...message, stickerMessage: undefined }
   writer = originalMessageEncode.call(this, other, writer)
@@ -341,6 +381,17 @@ async function extractStickerAudio(buffer) {
   }
 }
 
+async function relaySoundSticker(ctx, sticker, audio) {
+  const prepared = await prepareWAMessageMedia({ sticker, isAnimated: parseWebpChunks(sticker).some(c=>c.type==='ANIM') }, { upload: ctx.sock.waUploadToServer })
+  const payload = generateWAMessageFromContent(ctx.jid, prepared, { userJid: ctx.sock.user.id, quoted: ctx.msg })
+  if (!payload.message?.stickerMessage || !audio) throw new Error('SOUND_STICKER_MEDIA')
+  soundAudio.set(payload.message.stickerMessage, audio)
+  const wire = proto.Message.encode(payload.message).finish()
+  if (!wireFields(wire).some(f=>f.field===134)) throw new Error('SOUND_STICKER_WIRE')
+  console.info('RS sound sticker: native envelope encoded', { bytes: wire.length })
+  return await ctx.sock.relayMessage(ctx.jid, payload.message, { messageId: payload.key.id })
+}
+
 async function stickerWithAudio(ctx) {
   if (audioStickerBusy) return ctx.reply('⏳ Hay otro sticker con audio en proceso. Intenta nuevamente en unos segundos.')
   audioStickerBusy = true
@@ -349,18 +400,12 @@ async function stickerWithAudio(ctx) {
     if (type !== 'videoMessage') return ctx.reply('🎵 Responde a un video con sonido de hasta 8 segundos usando *.sa*. Recibirás un sticker animado con sonido integrado (experimental).')
     if (Number(content?.seconds || 0) > 8 || buffer.length > 8 * 1024 * 1024) return ctx.reply('❌ Usa un video de máximo 8 segundos y 8 MB.')
     const audio = await extractStickerAudio(buffer)
-    const sticker = await videoToWebp(buffer, true)
+    let sticker = await videoToWebp(buffer, true)
+    const name = ctx.args.join(' ').trim()
+    if (name) sticker = addStickerMetadata(sticker, name.slice(0,100), '', { fresh:true })
     if (!soundStickerCodecReady()) throw new Error('SOUND_STICKER_CODEC')
-    const options = { upload: ctx.sock.waUploadToServer }
-    const preparedSticker = await prepareWAMessageMedia({ sticker, isAnimated: true }, options)
-    const preparedAudio = await prepareWAMessageMedia({ audio, mimetype: 'audio/ogg; codecs=opus', ptt: false, seconds: Number(content?.seconds || 0) || undefined }, options)
-    const payload = generateWAMessageFromContent(ctx.jid, preparedSticker, { userJid: ctx.sock.user.id, quoted: ctx.msg })
-    if (!payload.message?.stickerMessage || !preparedAudio.audioMessage) throw new Error('SOUND_STICKER_MEDIA')
-    soundAudio.set(payload.message.stickerMessage, preparedAudio.audioMessage)
-    const wire = proto.Message.encode(payload.message).finish()
-    if (!wire.length) throw new Error('SOUND_STICKER_WIRE')
-    console.info('RS sound sticker: native envelope encoded', { bytes: wire.length })
-    await ctx.sock.relayMessage(ctx.jid, payload.message, { messageId: payload.key.id })
+    const preparedAudio = await prepareWAMessageMedia({ audio, mimetype: 'audio/ogg; codecs=opus', ptt: false, seconds: Number(content?.seconds || 0) || undefined }, { upload: ctx.sock.waUploadToServer })
+    await relaySoundSticker(ctx, sticker, preparedAudio.audioMessage)
     return
   } catch (error) {
     console.error('Audio sticker error:', String(error?.message || error).slice(0, 200))
@@ -424,5 +469,5 @@ export const stickerCommands = {
     try { const { buffer, type } = await ctx.downloadQuotedOrCurrent(); if (!type.includes('stickerMessage')) return ctx.reply('Responde a un sticker con .toimg'); const png = await sharp(buffer).png().toBuffer(); return ctx.sock.sendMessage(ctx.jid, { image: png, caption: '✅ Sticker convertido.' }, { quoted: ctx.msg }) }
     catch { return ctx.reply('❌ No pude convertir ese sticker.') }
   },
-  stickerinfo: async ctx => ctx.reply('🎨 *COMANDOS DE STICKERS*\n• *.sticker* / *.s* → convierte imagen o video corto en sticker.\n• *.letr texto* → sticker de texto en MAYÚSCULAS, fondo blanco completo y letra fina.\n• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n• *.ske Nombre* → crea una copia nueva del sticker con SOLO ese nombre, sin autor. Si tenías la versión anterior en Favoritos, elimínala y guarda la nueva; WhatsApp no permite renombrar favoritos existentes desde el bot.\n• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n• *.toimg* → convierte un sticker en imagen.\n• *.sa* / *.stickeraudio* → sticker animado con sonido integrado (experimental) de un video con sonido (máx. 8 s).')
+  stickerinfo: async ctx => ctx.reply('🎨 *COMANDOS DE STICKERS*\n• *.sticker* / *.s* → convierte imagen o video corto en sticker.\n• *.letr texto* → sticker de texto en MAYÚSCULAS, fondo blanco completo y letra fina.\n• *.cl* → sticker con tu nombre como pack y RANDY SYSTEMS como autor.\n• *.ske Nombre* → crea una copia con ese nombre, sin autor; conserva el audio si WhatsApp entrega sus datos. Si tenías la versión anterior en Favoritos, elimínala y guarda la nueva; WhatsApp no permite renombrar favoritos existentes desde el bot.\n• *.sck* → sticker limpio, sin nombre, autor ni metadata del bot.\n• *.swm Nombre | Autor* → cambia nombre del pack y autor.\n• *.toimg* → convierte un sticker en imagen.\n• *.sa* / *.stickeraudio* → sticker animado con sonido integrado (experimental) de un video con sonido (máx. 8 s). Usa .sa Nombre para añadir el nombre desde la creación.')
 }
