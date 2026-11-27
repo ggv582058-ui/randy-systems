@@ -188,10 +188,51 @@ function addStickerMetadata(webp, pack, author, { fresh = false } = {}) {
   return rebuildWebp(filtered)
 }
 
+// Keep a small, chat-scoped index of descriptors of sound stickers the bot
+// has just sent. Quoted messages can omit the new audio field on older clients.
+// Do not store audio bytes or persist private media across restarts.
+const recentSoundStickers = new Map()
+const SOUND_TTL = 6 * 60 * 60 * 1000
+const soundScope = ctx => JSON.stringify([String(ctx.sock.user?.id || ''), ctx.jid])
+function soundHash(content) {
+  const value = content?.fileEncSha256
+  if (!(value instanceof Uint8Array) || value.length !== 32) return ''
+  return Buffer.from(value).toString('base64')
+}
+function validSoundAudio(audio) {
+  return Boolean(audio?.mediaKey?.length === 32 && (audio.directPath || audio.url))
+}
+function rememberSoundSticker(ctx, id, content, audio) {
+  if (!id || !validSoundAudio(audio)) return
+  const scope = soundScope(ctx)
+  const key = JSON.stringify([scope, id])
+  const now = Date.now()
+  for (const [k,v] of recentSoundStickers) if (v.expires <= now) recentSoundStickers.delete(k)
+  recentSoundStickers.delete(key)
+  while (recentSoundStickers.size >= 300) recentSoundStickers.delete(recentSoundStickers.keys().next().value)
+  recentSoundStickers.set(key,{scope,hash:soundHash(content),audio,expires:now+SOUND_TTL})
+}
+function recoverSoundSticker(ctx, content) {
+  const info = ctx.msg?.message?.extendedTextMessage?.contextInfo ||
+    ctx.msg?.message?.imageMessage?.contextInfo || ctx.msg?.message?.videoMessage?.contextInfo
+  const scope = soundScope(ctx), hash = soundHash(content), now = Date.now()
+  const exact = info?.stanzaId && recentSoundStickers.get(JSON.stringify([scope,info.stanzaId]))
+  if (exact && exact.expires > now && (!hash || !exact.hash || exact.hash === hash)) return exact.audio
+  if (!hash) return null
+  const matches = [...recentSoundStickers.values()].filter(v=>v.scope===scope && v.hash===hash && v.expires>now)
+  // Avoid choosing a different soundtrack if several messages match.
+  return matches.length===1 ? matches[0].audio : null
+}
 async function mediaAsWebp(ctx) {
   const { buffer, type, content } = await ctx.downloadQuotedOrCurrent()
   if (type.includes('imageMessage')) return { webp: await imageToWebp(buffer), audio: null }
-  if (type.includes('stickerMessage')) return { webp: buffer, audio: content?.audioMessage || soundAudio.get(content) || null }
+  if (type.includes('stickerMessage')) {
+    const embedded = content?.audioMessage || soundAudio.get(content)
+    const audio = validSoundAudio(embedded) ? embedded : recoverSoundSticker(ctx,content)
+    console.info('RS sticker edit source:', { audio: Boolean(audio), embedded: Boolean(embedded), recovered: Boolean(audio && audio !== embedded) })
+    if (embedded && !audio) throw new Error('SOUND_STICKER_AUDIO_UNAVAILABLE')
+    return { webp: buffer, audio }
+  }
   throw new Error('unsupported sticker source')
 }
 
@@ -240,7 +281,7 @@ async function sck(ctx) {
 async function cl(ctx) {
   try {
     const { webp, audio } = await mediaAsWebp(ctx)
-    const pack = String(ctx.msg?.pushName || ctx.senderNumber || 'Usuario').slice(0, 100)
+    const pack = String(ctx.args.join(' ').trim() || ctx.msg?.pushName || ctx.senderNumber || 'Usuario').slice(0, 100)
     const author = String(config.botName || 'RANDY SYSTEMS').slice(0, 100)
     return await sendEditedSticker(ctx, addStickerMetadata(webp, pack, author), audio)
   } catch (error) { console.error('CL sticker error:', error); return ctx.reply('❌ Responde a una imagen o sticker con *.cl*. El pack llevará tu nombre y el autor será RANDY SYSTEMS.') }
@@ -389,7 +430,9 @@ async function relaySoundSticker(ctx, sticker, audio) {
   const wire = proto.Message.encode(payload.message).finish()
   if (!wireFields(wire).some(f=>f.field===134)) throw new Error('SOUND_STICKER_WIRE')
   console.info('RS sound sticker: native envelope encoded', { bytes: wire.length })
-  return await ctx.sock.relayMessage(ctx.jid, payload.message, { messageId: payload.key.id })
+  const result = await ctx.sock.relayMessage(ctx.jid, payload.message, { messageId: payload.key.id })
+  rememberSoundSticker(ctx, payload.key.id, payload.message.stickerMessage, audio)
+  return result
 }
 
 async function stickerWithAudio(ctx) {
