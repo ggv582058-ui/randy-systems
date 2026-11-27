@@ -223,11 +223,35 @@ function recoverSoundSticker(ctx, content) {
   // Avoid choosing a different soundtrack if several messages match.
   return matches.length===1 ? matches[0].audio : null
 }
+// Inspect only ordinary sticker messages delivered to this bot. Retain
+// the existing bounded, chat-scoped descriptor cache; no media download.
+function findSoundSticker(message, depth = 0) {
+  if (!message || typeof message !== 'object' || depth > 3) return null
+  const sticker = message.stickerMessage
+  if (sticker) {
+    const audio = sticker.audioMessage || soundAudio.get(sticker)
+    if (validSoundAudio(audio)) return { sticker, audio }
+  }
+  for (const key of ['audioStickerMessage','ephemeralMessage','deviceSentMessage']) {
+    const nested = message[key]?.message
+    const found = findSoundSticker(nested, depth + 1)
+    if (found) return found
+  }
+  return null
+}
+export function rememberIncomingSoundSticker(sock, msg) {
+  const jid = msg?.key?.remoteJid
+  if (!jid || !(jid.endsWith('@g.us') || jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid'))) return
+  const found = findSoundSticker(msg.message)
+  if (!found) return
+  rememberSoundSticker({sock,jid},msg.key.id,found.sticker,found.audio)
+}
 async function mediaAsWebp(ctx) {
   const { buffer, type, content } = await ctx.downloadQuotedOrCurrent()
   if (type.includes('imageMessage')) return { webp: await imageToWebp(buffer), audio: null }
   if (type.includes('stickerMessage')) {
-    const embedded = content?.audioMessage || soundAudio.get(content)
+    const quoted = ctx.msg?.message?.extendedTextMessage?.contextInfo?.quotedMessage || ctx.msg?.message?.imageMessage?.contextInfo?.quotedMessage || ctx.msg?.message?.videoMessage?.contextInfo?.quotedMessage
+    const embedded = content?.audioMessage || soundAudio.get(content) || findSoundSticker(quoted)?.audio
     const audio = validSoundAudio(embedded) ? embedded : recoverSoundSticker(ctx,content)
     console.info('RS sticker edit source:', { audio: Boolean(audio), embedded: Boolean(embedded), recovered: Boolean(audio && audio !== embedded) })
     if (embedded && !audio) throw new Error('SOUND_STICKER_AUDIO_UNAVAILABLE')
@@ -354,9 +378,9 @@ proto.Message.decode = function(reader,length,...rest) {
     if(raw){
       const body=wireFields(raw).find(f=>f.field===1&&f.wire===2)?.data
       const stickerBytes=wireFields(body).find(f=>f.field===26&&f.wire===2)?.data
-      if(stickerBytes && !result.stickerMessage) {
+      if(stickerBytes) {
         const sticker=StickerProto.decode(stickerBytes)
-        result.stickerMessage=sticker
+        if (!result.stickerMessage || validSoundAudio(sticker.audioMessage)) result.stickerMessage=sticker
         // Baileys sees an ordinary sticker; its attached audio stays on the sticker.
         if (result.audioStickerMessage) delete result.audioStickerMessage
       }
@@ -480,6 +504,9 @@ async function soundInfo(ctx) {
   walk(quoted)
   const wire = quoted.stickerMessage && stickerWireFields.get(quoted.stickerMessage)
   lines.push('Wire tags: ' + (wire || 'no disponibles; el mensaje pudo ser reconstruido'))
+  lines.push('Audio original reconocido: ' + (findSoundSticker(quoted) ? 'sí' : 'no'))
+  const source = quoted.stickerMessage || quoted.audioStickerMessage?.message?.stickerMessage
+  lines.push('Audio recuperable de mensajes recientes: ' + (recoverSoundSticker(ctx,source) ? 'sí' : 'no'))
   return ctx.reply('🔬 SOUND INFO — campos reconocidos por Baileys\n' + (lines.join('\n') || 'Sin campos reconocidos') + '\nLos campos desconocidos pueden haber sido descartados por el decodificador.')
 }
 
