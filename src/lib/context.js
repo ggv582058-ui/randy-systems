@@ -64,7 +64,8 @@ export async function buildContext(sock, msg, parsed) {
 
   const downloadQuotedOrCurrent = async () => {
     const q = quotedMessage(msg)
-    const container = q || msg.message
+    const raw = q || msg.message
+    const container = raw?.audioStickerMessage?.message?.stickerMessage ? raw.audioStickerMessage.message : raw
     const type = getContentType(container)
     const content = container?.[type]
     if (!type || !content) throw new Error('No se encontró multimedia.')
